@@ -1,0 +1,1715 @@
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index 3c23bac..7b188f1 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -35,6 +35,7 @@ model Usuario {
+   projetosSupervisor     Projeto[]   @relation("ProjetoSupervisor")
+   projetosAnalistaRapido Projeto[]   @relation("ProjetoAnalistaRapido")
+   tarefasResponsavel     Tarefa[]    @relation("TarefaResponsavel")
++  acoesPendenciaResponsavel AcaoPendencia[] @relation("AcaoPendenciaResponsavel")
+   vistorias              Vistoria[]  @relation("VistoriaResponsavel")
+   documentosUpload       Documento[]
+   notificacoes           Notificacao[]
+@@ -111,6 +112,10 @@ model Projeto {
+   valorSinal           Float?
+   valorPrestacao       Float?
+   numeroPrestacoes     Int?
++  // Protocolo / Acompanhamento de Processos
++  protocoloData        DateTime?
++  protocoloCodigoOrgao String?
++  emAcompanhamento     Boolean  @default(false)
+   criadoEm            DateTime @default(now())
+   atualizadoEm        DateTime @updatedAt
+ 
+@@ -124,6 +129,8 @@ model Projeto {
+   documentos     Documento[]
+   comentarios    Comentario[]
+   historico      HistoricoStatus[]
++  pendencias     Pendencia[]
++  licenca        Licenca?
+ 
+   @@map("projetos")
+ }
+@@ -192,6 +199,60 @@ model Tarefa {
+   @@map("tarefas")
+ }
+ 
++// ============================================================
++// ACOMPANHAMENTO DE PROCESSOS (pós-protocolo, até a licença)
++// Pendencia.status: ABERTA | CONCLUIDA
++// ============================================================
++
++model Pendencia {
++  id            String    @id @default(cuid())
++  projetoId     String
++  numeroPedido  String
++  data          DateTime
++  prazoResposta DateTime
++  status        String    @default("ABERTA")
++  dataEntrega   DateTime?
++  criadoEm      DateTime  @default(now())
++  atualizadoEm  DateTime  @updatedAt
++
++  projeto Projeto         @relation(fields: [projetoId], references: [id])
++  acoes   AcaoPendencia[]
++
++  @@map("pendencias")
++}
++
++model AcaoPendencia {
++  id            String    @id @default(cuid())
++  pendenciaId   String
++  descricao     String
++  responsavelId String?
++  concluida     Boolean   @default(false)
++  dataConclusao DateTime?
++  criadoEm      DateTime  @default(now())
++  atualizadoEm  DateTime  @updatedAt
++
++  pendencia   Pendencia @relation(fields: [pendenciaId], references: [id])
++  responsavel Usuario?  @relation("AcaoPendenciaResponsavel", fields: [responsavelId], references: [id])
++
++  @@map("acoes_pendencia")
++}
++
++model Licenca {
++  id             String    @id @default(cuid())
++  projetoId      String    @unique
++  numero         String
++  dataEmissao    DateTime
++  dataValidade   DateTime?
++  condicionantes String?
++  documentoUrl   String?
++  criadoEm       DateTime  @default(now())
++  atualizadoEm   DateTime  @updatedAt
++
++  projeto Projeto @relation(fields: [projetoId], references: [id])
++
++  @@map("licencas")
++}
++
+ // ============================================================
+ // EQUIPES DE CAMPO
+ // ============================================================
+diff --git a/src/app/(dashboard)/acompanhamento/[id]/page.tsx b/src/app/(dashboard)/acompanhamento/[id]/page.tsx
+new file mode 100644
+index 0000000..cd1f809
+--- /dev/null
++++ b/src/app/(dashboard)/acompanhamento/[id]/page.tsx
+@@ -0,0 +1,775 @@
++'use client'
++
++import { useState, useEffect, useCallback } from 'react'
++import { useParams, useRouter } from 'next/navigation'
++import { toast } from 'sonner'
++import {
++  ArrowLeft, Plus, Check, FileText, BarChart2, MapPin,
++  Calendar, Loader2, Award, Clock, Trash2,
++  X, Home, Hash, ChevronDown, ChevronUp, AlertTriangle,
++} from 'lucide-react'
++import { formatDate } from '@/lib/utils'
++
++// ── Categorização visual das pendências (calculada a partir de status + prazo) ──
++type CategoriaPendencia = 'ativa' | 'a_vencer' | 'atrasada' | 'respondida'
++
++const CATEGORIA_INFO: Record<CategoriaPendencia, {
++  label: string; barColor: string; badgeColor: string; headerBg: string
++}> = {
++  ativa:      { label: 'Ativa',      barColor: 'bg-blue-500',  badgeColor: 'bg-blue-100 text-blue-700',   headerBg: 'bg-blue-50/50' },
++  a_vencer:   { label: 'A Vencer',   barColor: 'bg-amber-500', badgeColor: 'bg-amber-100 text-amber-800', headerBg: 'bg-amber-50/50' },
++  atrasada:   { label: 'Atrasada',   barColor: 'bg-red-500',   badgeColor: 'bg-red-100 text-red-700',     headerBg: 'bg-red-50/50' },
++  respondida: { label: 'Respondida', barColor: 'bg-green-500', badgeColor: 'bg-green-100 text-green-800', headerBg: 'bg-green-50/50' },
++}
++
++function categoriaPendencia(pendencia: any): CategoriaPendencia {
++  if (pendencia.status === 'CONCLUIDA') return 'respondida'
++  const hoje = new Date()
++  hoje.setHours(0, 0, 0, 0)
++  const prazo = new Date(pendencia.prazoResposta)
++  prazo.setHours(0, 0, 0, 0)
++  const diffDias = Math.ceil((prazo.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24))
++  if (diffDias < 0) return 'atrasada'
++  if (diffDias <= 7) return 'a_vencer'
++  return 'ativa'
++}
++
++export default function AcompanhamentoDetalhe() {
++  const params = useParams()
++  const router = useRouter()
++  const id     = params.id as string
++
++  const [projeto, setProjeto] = useState<any>(null)
++  const [loading, setLoading] = useState(true)
++  const [usuarios, setUsuarios] = useState<any[]>([])
++
++  // Toggle de ação individual (mostra spinner na linha)
++  const [togglingId, setTogglingId] = useState<string | null>(null)
++
++  // Override manual de expandir/retrair cada card de pendência (chave = pendencia.id)
++  const [expandedOverride, setExpandedOverride] = useState<Record<string, boolean>>({})
++
++  // Modal Nova Pendência
++  const [modalPendencia, setModalPendencia]   = useState(false)
++  const [pendenciaForm, setPendenciaForm]     = useState({
++    numeroPedido: '', data: '', prazoResposta: '',
++    acoes: [{ descricao: '', responsavelId: '' }] as { descricao: string; responsavelId: string }[],
++  })
++  const [salvandoPendencia, setSalvandoPendencia] = useState(false)
++
++  // Modal Licença Concedida
++  const [modalLicenca, setModalLicenca]   = useState(false)
++  const [licencaForm, setLicencaForm]     = useState({
++    numero: '', dataEmissao: '', dataValidade: '', condicionantes: '', documentoUrl: '',
++  })
++  const [salvandoLicenca, setSalvandoLicenca] = useState(false)
++
++  const HOJE_STR = new Date().toISOString().split('T')[0]
++
++  const loadProjeto = useCallback(async () => {
++    setLoading(true)
++    try {
++      const res = await fetch(`/api/projetos/${id}`)
++      if (!res.ok) { router.push('/acompanhamento'); return }
++      const data = await res.json()
++      if (!data.projeto?.emAcompanhamento) {
++        toast.error('Este projeto ainda não está em acompanhamento de processos')
++        router.push('/acompanhamento')
++        return
++      }
++      setProjeto(data.projeto)
++    } catch {
++      toast.error('Erro ao carregar projeto')
++    } finally {
++      setLoading(false)
++    }
++  }, [id, router])
++
++  useEffect(() => {
++    loadProjeto()
++    fetch('/api/usuarios?ativo=true').then(r => r.json()).then(d => setUsuarios(d.usuarios || []))
++  }, [loadProjeto])
++
++  function labelUsuario(u: any) {
++    const partes = [u.nome]
++    if (u.cargo) partes.push(u.cargo)
++    return partes.join(' — ')
++  }
++
++  function servicoPrestado(p: any) {
++    if (p?.servicosContratados) {
++      try {
++        const lista = JSON.parse(p.servicosContratados)
++        if (Array.isArray(lista) && lista.length > 0) return lista.join(', ')
++      } catch {}
++    }
++    return p?.tipoServico
++  }
++
++  // ── Expandir/retrair card de pendência (Concluídas iniciam retraídas) ──
++  function isExpanded(pendencia: any) {
++    if (pendencia.id in expandedOverride) return expandedOverride[pendencia.id]
++    return pendencia.status !== 'CONCLUIDA'
++  }
++  function toggleExpand(pendenciaId: string, atual: boolean) {
++    setExpandedOverride(prev => ({ ...prev, [pendenciaId]: !atual }))
++  }
++
++  // ── Marcar/desmarcar ação dentro de uma pendência ──────────────
++  async function toggleAcao(acaoId: string, atual: boolean, pendenciaStatus: string) {
++    if (pendenciaStatus === 'CONCLUIDA') {
++      toast.info('Esta pendência já foi concluída e está disponível apenas para leitura')
++      return
++    }
++    setTogglingId(acaoId)
++    // Otimista
++    setProjeto((prev: any) => ({
++      ...prev,
++      pendencias: prev.pendencias.map((pd: any) => ({
++        ...pd,
++        acoes: pd.acoes.map((a: any) => a.id === acaoId ? { ...a, concluida: !atual } : a),
++      })),
++    }))
++    try {
++      const res = await fetch('/api/acoes', {
++        method: 'PATCH',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ id: acaoId, concluida: !atual }),
++      })
++      if (!res.ok) {
++        const d = await res.json()
++        toast.error(d.error || 'Erro ao atualizar ação')
++        loadProjeto()
++        return
++      }
++      const data = await res.json()
++      if (data.pendencia) {
++        toast.success('✅ Todas as ações concluídas — pendência encerrada!')
++      }
++      loadProjeto()
++    } catch {
++      toast.error('Erro ao atualizar ação')
++      loadProjeto()
++    } finally {
++      setTogglingId(null)
++    }
++  }
++
++  // ── Form Nova Pendência: ações dinâmicas ───────────────────────
++  function adicionarAcaoForm() {
++    setPendenciaForm(p => ({ ...p, acoes: [...p.acoes, { descricao: '', responsavelId: '' }] }))
++  }
++  function removerAcaoForm(idx: number) {
++    setPendenciaForm(p => ({ ...p, acoes: p.acoes.filter((_, i) => i !== idx) }))
++  }
++  function atualizarAcaoForm(idx: number, campo: 'descricao' | 'responsavelId', valor: string) {
++    setPendenciaForm(p => ({
++      ...p,
++      acoes: p.acoes.map((a, i) => i === idx ? { ...a, [campo]: valor } : a),
++    }))
++  }
++
++  async function criarPendencia() {
++    if (!pendenciaForm.numeroPedido.trim() || !pendenciaForm.data || !pendenciaForm.prazoResposta) {
++      toast.error('Preencha número do pedido, data e prazo de resposta')
++      return
++    }
++    const acoesValidas = pendenciaForm.acoes.filter(a => a.descricao.trim())
++    if (acoesValidas.length === 0) {
++      toast.error('Adicione pelo menos uma ação')
++      return
++    }
++    setSalvandoPendencia(true)
++    try {
++      const res = await fetch('/api/pendencias', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({
++          projetoId: id,
++          numeroPedido: pendenciaForm.numeroPedido.trim(),
++          data: pendenciaForm.data,
++          prazoResposta: pendenciaForm.prazoResposta,
++          acoes: acoesValidas,
++        }),
++      })
++      if (!res.ok) {
++        const d = await res.json()
++        toast.error(d.error || 'Erro ao criar pendência')
++        return
++      }
++      toast.success('Pendência criada!')
++      setModalPendencia(false)
++      setPendenciaForm({ numeroPedido: '', data: '', prazoResposta: '', acoes: [{ descricao: '', responsavelId: '' }] })
++      loadProjeto()
++    } catch {
++      toast.error('Erro ao criar pendência')
++    } finally {
++      setSalvandoPendencia(false)
++    }
++  }
++
++  // ── Licença concedida ───────────────────────────────────────────
++  function abrirModalLicenca() {
++    setLicencaForm({
++      numero: projeto?.licenca?.numero || '',
++      dataEmissao: projeto?.licenca?.dataEmissao ? projeto.licenca.dataEmissao.split('T')[0] : HOJE_STR,
++      dataValidade: projeto?.licenca?.dataValidade ? projeto.licenca.dataValidade.split('T')[0] : '',
++      condicionantes: projeto?.licenca?.condicionantes || '',
++      documentoUrl: projeto?.licenca?.documentoUrl || '',
++    })
++    setModalLicenca(true)
++  }
++
++  async function salvarLicenca() {
++    if (!licencaForm.numero.trim() || !licencaForm.dataEmissao) {
++      toast.error('Informe o número da licença e a data de emissão')
++      return
++    }
++    setSalvandoLicenca(true)
++    try {
++      const res = await fetch('/api/licencas', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({
++          projetoId: id,
++          numero: licencaForm.numero.trim(),
++          dataEmissao: licencaForm.dataEmissao,
++          dataValidade: licencaForm.dataValidade || null,
++          condicionantes: licencaForm.condicionantes || null,
++          documentoUrl: licencaForm.documentoUrl || null,
++        }),
++      })
++      if (!res.ok) {
++        const d = await res.json()
++        toast.error(d.error || 'Erro ao registrar licença')
++        return
++      }
++      toast.success('🎉 Licença registrada com sucesso!')
++      setModalLicenca(false)
++      loadProjeto()
++    } catch {
++      toast.error('Erro ao registrar licença')
++    } finally {
++      setSalvandoLicenca(false)
++    }
++  }
++
++  if (loading) {
++    return (
++      <div className="flex items-center justify-center h-64">
++        <div className="w-8 h-8 border-4 border-green-600 border-t-transparent rounded-full animate-spin" />
++      </div>
++    )
++  }
++  if (!projeto) return null
++
++  const pendencias = projeto.pendencias || []
++  const licenciado  = !!projeto.licenca
++
++  return (
++    <div className="flex flex-col gap-5">
++
++      {/* ── Header ──────────────────────────────────────────── */}
++      <div className="flex flex-col gap-3">
++        <button
++          onClick={() => router.push('/acompanhamento')}
++          className="flex items-center gap-2 text-gray-500 hover:text-gray-700 font-medium text-sm w-fit"
++        >
++          <ArrowLeft className="w-4 h-4" />
++          Voltar
++        </button>
++
++        <div className="flex flex-col sm:flex-row sm:items-start gap-3">
++          <div className="flex-1 min-w-0">
++            <div className="flex items-center gap-2 flex-wrap">
++              <span className="font-mono text-xs text-gray-400">{projeto.codigo}</span>
++              <h1 className="text-lg sm:text-xl font-bold text-gray-900 truncate">
++                {projeto.imovelNome || projeto.cliente?.nome}
++              </h1>
++            </div>
++            <div className="flex items-center gap-2 mt-1 flex-wrap">
++              {licenciado ? (
++                <span className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-green-100 text-green-800">
++                  <Award className="w-3.5 h-3.5" /> Licenciado
++                </span>
++              ) : (
++                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">
++                  ⏳ Em processo
++                </span>
++              )}
++              <span className="text-xs text-gray-500">{servicoPrestado(projeto)} • {projeto.municipio}</span>
++            </div>
++          </div>
++
++          {!licenciado && (
++            <button
++              onClick={abrirModalLicenca}
++              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition-colors w-full sm:w-auto"
++            >
++              <Award className="w-4 h-4" /> Licença Concedida
++            </button>
++          )}
++        </div>
++      </div>
++
++      {/* ── Info Cards ──────────────────────────────────────── */}
++      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
++        <div className="bg-white rounded-xl border border-gray-100 p-3 sm:p-4">
++          <div className="flex items-center gap-1.5 text-gray-400 mb-1">
++            <Home className="w-3.5 h-3.5" />
++            <span className="text-xs">Fazenda</span>
++          </div>
++          <p className="font-semibold text-sm text-gray-900 truncate">{projeto.imovelNome || '—'}</p>
++        </div>
++        <div className="bg-white rounded-xl border border-gray-100 p-3 sm:p-4">
++          <div className="flex items-center gap-1.5 text-gray-400 mb-1">
++            <MapPin className="w-3.5 h-3.5" />
++            <span className="text-xs">Localização</span>
++          </div>
++          <p className="font-semibold text-sm text-gray-900 truncate">
++            {[projeto.municipio, projeto.estado].filter(Boolean).join(' / ') || '—'}
++          </p>
++        </div>
++        <div className="bg-white rounded-xl border border-gray-100 p-3 sm:p-4">
++          <div className="flex items-center gap-1.5 text-gray-400 mb-1">
++            <BarChart2 className="w-3.5 h-3.5" />
++            <span className="text-xs">Área</span>
++          </div>
++          <p className="font-semibold text-sm text-gray-900 truncate">
++            {projeto.areaHectares ? `${Number(projeto.areaHectares).toLocaleString('pt-BR')} ha` : '—'}
++          </p>
++        </div>
++        <div className="bg-white rounded-xl border border-gray-100 p-3 sm:p-4">
++          <div className="flex items-center gap-1.5 text-gray-400 mb-1">
++            <Hash className="w-3.5 h-3.5" />
++            <span className="text-xs">Protocolo</span>
++          </div>
++          <p className="font-semibold text-sm text-gray-900 truncate">{projeto.protocoloCodigoOrgao || '—'}</p>
++          {projeto.protocoloData && <p className="text-xs text-gray-400 mt-0.5">{formatDate(projeto.protocoloData)}</p>}
++        </div>
++      </div>
++
++      {/* CAR — linha própria */}
++      {projeto.car && (
++        <div className="bg-white rounded-xl border border-gray-100 p-3 sm:p-4">
++          <div className="flex items-center gap-1.5 text-gray-400 mb-1">
++            <FileText className="w-3.5 h-3.5" />
++            <span className="text-xs">CAR</span>
++          </div>
++          <p className="font-semibold text-sm text-gray-900 font-mono" style={{ wordBreak: 'break-all' }}>
++            {projeto.car}
++          </p>
++        </div>
++      )}
++
++      {/* ── Licença concedida (se existir) ─────────────────────── */}
++      {licenciado && (
++        <div className="bg-white rounded-2xl border border-green-100 p-4 sm:p-6">
++          <div className="flex items-center justify-between mb-4">
++            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
++              <Award className="w-4 h-4 text-green-600" /> Licença
++            </h3>
++            <button
++              onClick={abrirModalLicenca}
++              className="text-xs text-green-600 hover:text-green-700 font-medium"
++            >
++              Editar
++            </button>
++          </div>
++          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
++            <div>
++              <span className="text-xs text-gray-400">Número</span>
++              <p className="font-semibold text-sm text-gray-900">{projeto.licenca.numero}</p>
++            </div>
++            <div>
++              <span className="text-xs text-gray-400">Data de Emissão</span>
++              <p className="font-semibold text-sm text-gray-900">{formatDate(projeto.licenca.dataEmissao)}</p>
++            </div>
++            <div>
++              <span className="text-xs text-gray-400">Validade</span>
++              <p className="font-semibold text-sm text-gray-900">{projeto.licenca.dataValidade ? formatDate(projeto.licenca.dataValidade) : '—'}</p>
++            </div>
++            <div>
++              <span className="text-xs text-gray-400">Documento</span>
++              {projeto.licenca.documentoUrl ? (
++                <a href={projeto.licenca.documentoUrl} target="_blank" rel="noopener noreferrer" className="block font-semibold text-sm text-green-600 hover:underline truncate">
++                  Abrir arquivo
++                </a>
++              ) : (
++                <p className="font-semibold text-sm text-gray-400">—</p>
++              )}
++            </div>
++          </div>
++          {projeto.licenca.condicionantes && (
++            <div className="mt-3 pt-3 border-t border-gray-50">
++              <span className="text-xs text-gray-400">Condicionantes</span>
++              <p className="text-sm text-gray-700 whitespace-pre-wrap">{projeto.licenca.condicionantes}</p>
++            </div>
++          )}
++        </div>
++      )}
++
++      {/* ── Pendências ──────────────────────────────────────── */}
++      <div className="space-y-3">
++        <div className="flex items-center justify-between">
++          <div>
++            <h3 className="font-semibold text-gray-900">Pendências do Processo</h3>
++            <p className="text-xs text-gray-400 mt-0.5">
++              {pendencias.filter((p: any) => p.status === 'ABERTA').length} aberta(s) · {pendencias.length} no total
++            </p>
++          </div>
++          {!licenciado && (
++            <button
++              onClick={() => setModalPendencia(true)}
++              className="flex items-center gap-1.5 text-sm text-green-600 hover:text-green-700 font-medium"
++            >
++              <Plus className="w-4 h-4" /> Nova Pendência
++            </button>
++          )}
++        </div>
++
++        {pendencias.length === 0 ? (
++          <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center">
++            <Clock className="w-9 h-9 mx-auto mb-3 text-amber-300" />
++            <p className="text-sm font-semibold text-gray-700 mb-1">Nenhuma pendência registrada</p>
++            <p className="text-xs text-gray-400">
++              Quando o órgão solicitar informações complementares, registre aqui.
++            </p>
++          </div>
++        ) : (
++          <div className="space-y-3">
++            {pendencias.map((pendencia: any) => {
++              const totalAcoes = pendencia.acoes?.length || 0
++              const concluidasAcoes = pendencia.acoes?.filter((a: any) => a.concluida).length || 0
++              const isConcluida = pendencia.status === 'CONCLUIDA'
++              const categoria = categoriaPendencia(pendencia)
++              const catInfo = CATEGORIA_INFO[categoria]
++              const expanded = isExpanded(pendencia)
++
++              return (
++                <div key={pendencia.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm flex">
++                  {/* Barra lateral — categoria da pendência */}
++                  <div className={`w-1.5 flex-shrink-0 ${catInfo.barColor}`} />
++
++                  <div className="flex-1 min-w-0">
++                    {/* Cabeçalho clicável (expandir/retrair) */}
++                    <button
++                      type="button"
++                      onClick={() => toggleExpand(pendencia.id, expanded)}
++                      className={`w-full px-4 sm:px-6 py-3 flex items-center gap-3 flex-wrap text-left transition-colors hover:brightness-[0.98] ${expanded ? 'border-b border-gray-50' : ''} ${catInfo.headerBg}`}
++                    >
++                      <div className="flex items-center gap-2 flex-wrap">
++                        <span className="font-semibold text-gray-900 text-sm">Pedido {pendencia.numeroPedido}</span>
++                        <span className={`flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full ${catInfo.badgeColor}`}>
++                          {categoria === 'atrasada' && <AlertTriangle className="w-3 h-3" />}
++                          {catInfo.label}
++                        </span>
++                      </div>
++
++                      <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap ml-auto">
++                        <span className="flex items-center gap-1">
++                          <Calendar className="w-3.5 h-3.5" /> {formatDate(pendencia.data)}
++                        </span>
++                        <span className="flex items-center gap-1">
++                          <Clock className="w-3.5 h-3.5" /> Prazo: {formatDate(pendencia.prazoResposta)}
++                        </span>
++                        {pendencia.dataEntrega && (
++                          <span className="flex items-center gap-1 text-green-700 font-medium">
++                            <Check className="w-3.5 h-3.5" /> Entregue: {formatDate(pendencia.dataEntrega)}
++                          </span>
++                        )}
++                      </div>
++
++                      {expanded
++                        ? <ChevronUp className="w-4 h-4 text-gray-400 flex-shrink-0" />
++                        : <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" />}
++                    </button>
++
++                    {expanded ? (
++                      <>
++                        {/* Progresso */}
++                        <div className="px-4 sm:px-6 pt-3">
++                          <div className="flex items-center justify-between mb-1.5">
++                            <span className="text-xs text-gray-400">{concluidasAcoes} de {totalAcoes} ações concluídas</span>
++                          </div>
++                          <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
++                            <div
++                              className={`h-1.5 rounded-full transition-all duration-500 ${isConcluida ? 'bg-green-500' : 'bg-amber-400'}`}
++                              style={{ width: totalAcoes > 0 ? `${(concluidasAcoes / totalAcoes) * 100}%` : '0%' }}
++                            />
++                          </div>
++                        </div>
++
++                        {/* Lista de ações */}
++                        <div className="px-4 sm:px-6 py-3 space-y-2">
++                          {(pendencia.acoes || []).map((acao: any) => (
++                            <div key={acao.id} className="flex items-start gap-3 py-1.5">
++                              <button
++                                onClick={() => toggleAcao(acao.id, acao.concluida, pendencia.status)}
++                                disabled={isConcluida || togglingId === acao.id}
++                                className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 transition-colors ${
++                                  acao.concluida
++                                    ? 'bg-green-600 border-green-600'
++                                    : 'border-gray-300 hover:border-green-500'
++                                } ${isConcluida ? 'cursor-default opacity-80' : 'cursor-pointer'}`}
++                              >
++                                {togglingId === acao.id
++                                  ? <Loader2 className="w-3 h-3 text-gray-400 animate-spin" />
++                                  : acao.concluida && <Check className="w-3 h-3 text-white" />}
++                              </button>
++                              <div className="flex-1 min-w-0">
++                                <p className={`text-sm leading-snug ${acao.concluida ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
++                                  {acao.descricao}
++                                </p>
++                                {acao.responsavel && (
++                                  <span className="text-xs text-gray-400">{acao.responsavel.nome}</span>
++                                )}
++                              </div>
++                            </div>
++                          ))}
++                        </div>
++                      </>
++                    ) : (
++                      <button
++                        type="button"
++                        onClick={() => toggleExpand(pendencia.id, expanded)}
++                        className="w-full px-4 sm:px-6 py-2.5 flex items-center justify-between text-left hover:bg-gray-50/60 transition-colors"
++                      >
++                        <span className="text-xs text-gray-400">{concluidasAcoes} de {totalAcoes} ações concluídas</span>
++                        <span className="text-xs text-green-600 font-medium">Ver detalhes</span>
++                      </button>
++                    )}
++                  </div>
++                </div>
++              )
++            })}
++          </div>
++        )}
++      </div>
++
++      {/* ══════════════════════════════════════════════════════
++          MODAL NOVA PENDÊNCIA
++          ══════════════════════════════════════════════════════ */}
++      {modalPendencia && (
++        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
++          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
++            {/* Header */}
++            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
++              <div>
++                <h2 className="font-bold text-gray-900">📌 Nova Pendência</h2>
++                <p className="text-xs text-gray-500 mt-0.5">Solicitação de informações complementares do órgão</p>
++              </div>
++              <button
++                onClick={() => setModalPendencia(false)}
++                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
++              >
++                <X className="w-4 h-4" />
++              </button>
++            </div>
++
++            {/* Formulário */}
++            <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
++              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
++                <div>
++                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Número do Pedido</label>
++                  <input
++                    type="text"
++                    value={pendenciaForm.numeroPedido}
++                    onChange={e => setPendenciaForm(p => ({ ...p, numeroPedido: e.target.value }))}
++                    placeholder="Ex: 001/2026"
++                    className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
++                    autoFocus
++                  />
++                </div>
++                <div>
++                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Data</label>
++                  <input
++                    type="date"
++                    value={pendenciaForm.data}
++                    onChange={e => setPendenciaForm(p => ({ ...p, data: e.target.value }))}
++                    className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
++                  />
++                </div>
++                <div>
++                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Prazo de Resposta</label>
++                  <input
++                    type="date"
++                    value={pendenciaForm.prazoResposta}
++                    onChange={e => setPendenciaForm(p => ({ ...p, prazoResposta: e.target.value }))}
++                    className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
++                  />
++                </div>
++              </div>
++              <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
++                ⚠️ O prazo de resposta é a data final para a entrega de todas as ações listadas abaixo.
++              </p>
++
++              {/* Ações */}
++              <div>
++                <div className="flex items-center justify-between mb-2">
++                  <label className="block text-sm font-medium text-gray-700">Ações a serem feitas</label>
++                  <button
++                    onClick={adicionarAcaoForm}
++                    className="flex items-center gap-1 text-xs text-green-600 hover:text-green-700 font-medium"
++                  >
++                    <Plus className="w-3.5 h-3.5" /> Adicionar ação
++                  </button>
++                </div>
++                <div className="space-y-2">
++                  {pendenciaForm.acoes.map((acao, idx) => (
++                    <div key={idx} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
++                      <div className="flex items-start gap-2">
++                        <div className="flex-1 space-y-2">
++                          <input
++                            type="text"
++                            value={acao.descricao}
++                            onChange={e => atualizarAcaoForm(idx, 'descricao', e.target.value)}
++                            placeholder="Breve descrição da ação"
++                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
++                          />
++                          <select
++                            value={acao.responsavelId}
++                            onChange={e => atualizarAcaoForm(idx, 'responsavelId', e.target.value)}
++                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
++                          >
++                            <option value="">Responsável...</option>
++                            {usuarios.map(u => <option key={u.id} value={u.id}>{labelUsuario(u)}</option>)}
++                          </select>
++                        </div>
++                        {pendenciaForm.acoes.length > 1 && (
++                          <button
++                            onClick={() => removerAcaoForm(idx)}
++                            className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg flex-shrink-0"
++                          >
++                            <Trash2 className="w-4 h-4" />
++                          </button>
++                        )}
++                      </div>
++                    </div>
++                  ))}
++                </div>
++              </div>
++            </div>
++
++            {/* Ações do modal */}
++            <div className="px-6 pb-5 pt-3 flex gap-2 flex-shrink-0 border-t border-gray-50">
++              <button
++                onClick={criarPendencia}
++                disabled={salvandoPendencia}
++                className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold transition-colors"
++              >
++                {salvandoPendencia ? <Loader2 className="w-4 h-4 animate-spin" /> : '💾'}
++                Salvar Pendência
++              </button>
++              <button
++                onClick={() => setModalPendencia(false)}
++                className="px-5 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm font-medium"
++              >
++                Cancelar
++              </button>
++            </div>
++          </div>
++        </div>
++      )}
++
++      {/* ══════════════════════════════════════════════════════
++          MODAL LICENÇA CONCEDIDA
++          ══════════════════════════════════════════════════════ */}
++      {modalLicenca && (
++        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
++          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden max-h-[90vh] flex flex-col">
++            {/* Header */}
++            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
++              <div>
++                <h2 className="font-bold text-gray-900">🏅 Licença Concedida</h2>
++                <p className="text-xs text-gray-500 mt-0.5">Registre os dados da licença emitida pelo órgão</p>
++              </div>
++              <button
++                onClick={() => setModalLicenca(false)}
++                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
++              >
++                <X className="w-4 h-4" />
++              </button>
++            </div>
++
++            {/* Formulário */}
++            <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
++              <div>
++                <label className="block text-sm font-medium text-gray-700 mb-1.5">Número da Licença</label>
++                <input
++                  type="text"
++                  value={licencaForm.numero}
++                  onChange={e => setLicencaForm(p => ({ ...p, numero: e.target.value }))}
++                  placeholder="Ex: LO 1234/2026"
++                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
++                  autoFocus
++                />
++              </div>
++              <div className="grid grid-cols-2 gap-3">
++                <div>
++                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Data de Emissão</label>
++                  <input
++                    type="date"
++                    value={licencaForm.dataEmissao}
++                    onChange={e => setLicencaForm(p => ({ ...p, dataEmissao: e.target.value }))}
++                    className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
++                  />
++                </div>
++                <div>
++                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Data de Validade</label>
++                  <input
++                    type="date"
++                    value={licencaForm.dataValidade}
++                    onChange={e => setLicencaForm(p => ({ ...p, dataValidade: e.target.value }))}
++                    className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
++                  />
++                </div>
++              </div>
++              <div>
++                <label className="block text-sm font-medium text-gray-700 mb-1.5">Condicionantes</label>
++                <textarea
++                  value={licencaForm.condicionantes}
++                  onChange={e => setLicencaForm(p => ({ ...p, condicionantes: e.target.value }))}
++                  placeholder="Condições impostas pelo órgão para a manutenção da licença"
++                  rows={3}
++                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
++                />
++              </div>
++              <div>
++                <label className="block text-sm font-medium text-gray-700 mb-1.5">Documento da Licença</label>
++                <input
++                  type="text"
++                  value={licencaForm.documentoUrl}
++                  onChange={e => setLicencaForm(p => ({ ...p, documentoUrl: e.target.value }))}
++                  placeholder="Link/caminho do arquivo (upload em breve)"
++                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
++                />
++                <p className="text-xs text-gray-400 mt-1">
++                  O upload direto de arquivo ainda será implementado — por ora, informe um link/caminho.
++                </p>
++              </div>
++            </div>
++
++            {/* Ações do modal */}
++            <div className="px-6 pb-5 pt-3 flex gap-2 flex-shrink-0 border-t border-gray-50">
++              <button
++                onClick={salvarLicenca}
++                disabled={salvandoLicenca}
++                className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold transition-colors"
++              >
++                {salvandoLicenca ? <Loader2 className="w-4 h-4 animate-spin" /> : '💾'}
++                Salvar Licença
++              </button>
++              <button
++                onClick={() => setModalLicenca(false)}
++                className="px-5 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm font-medium"
++              >
++                Cancelar
++              </button>
++            </div>
++          </div>
++        </div>
++      )}
++    </div>
++  )
++}
+diff --git a/src/app/(dashboard)/acompanhamento/page.tsx b/src/app/(dashboard)/acompanhamento/page.tsx
+new file mode 100644
+index 0000000..0b0754d
+--- /dev/null
++++ b/src/app/(dashboard)/acompanhamento/page.tsx
+@@ -0,0 +1,169 @@
++'use client'
++
++import { useState, useEffect, useCallback } from 'react'
++import { toast } from 'sonner'
++import Link from 'next/link'
++import {
++  Search, FileSearch, ChevronRight, MapPin, BarChart2, FileText,
++  Award, AlertCircle, Home,
++} from 'lucide-react'
++
++export default function AcompanhamentoPage() {
++  const [projetos, setProjetos] = useState<any[]>([])
++  const [loading, setLoading]   = useState(true)
++  const [search, setSearch]     = useState('')
++
++  const load = useCallback(async () => {
++    setLoading(true)
++    try {
++      const params = new URLSearchParams()
++      params.set('emAcompanhamento', 'true')
++      if (search) params.set('search', search)
++      const res = await fetch(`/api/projetos?${params}`)
++      if (!res.ok) throw new Error()
++      const data = await res.json()
++      setProjetos(data.projetos || [])
++    } catch {
++      toast.error('Erro ao carregar processos')
++    } finally {
++      setLoading(false)
++    }
++  }, [search])
++
++  useEffect(() => {
++    const t = setTimeout(load, 300)
++    return () => clearTimeout(t)
++  }, [load])
++
++  function servicoPrestado(projeto: any) {
++    if (projeto.servicosContratados) {
++      try {
++        const lista = JSON.parse(projeto.servicosContratados)
++        if (Array.isArray(lista) && lista.length > 0) return lista.join(', ')
++      } catch {}
++    }
++    return projeto.tipoServico
++  }
++
++  return (
++    <div className="space-y-6">
++      {/* Título */}
++      <div>
++        <h1 className="text-2xl font-bold text-gray-900">Acompanhamento de Processos</h1>
++        <p className="text-gray-500 text-sm mt-1">
++          Projetos protocolados nos órgãos ambientais — acompanhe pendências e a emissão da licença
++        </p>
++      </div>
++
++      {/* Busca */}
++      <div className="relative">
++        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
++        <input
++          type="text"
++          value={search}
++          onChange={e => setSearch(e.target.value)}
++          placeholder="Buscar por nome, código ou município..."
++          className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 text-sm bg-white"
++        />
++      </div>
++
++      {/* Lista de processos */}
++      {loading ? (
++        <div className="flex items-center justify-center h-40">
++          <div className="w-8 h-8 border-4 border-green-600 border-t-transparent rounded-full animate-spin" />
++        </div>
++      ) : projetos.length === 0 ? (
++        <div className="text-center py-16 text-gray-400">
++          <FileSearch className="w-12 h-12 mx-auto mb-3 opacity-30" />
++          <p className="font-medium">Nenhum processo em acompanhamento</p>
++          <p className="text-sm mt-1 text-gray-400">
++            Projetos aparecem aqui após a tarefa &quot;Protocolo&quot; ser concluída no Operacional
++          </p>
++        </div>
++      ) : (
++        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
++          {projetos.map((projeto: any) => {
++            const pendenciasAbertas = (projeto.pendencias || []).filter((p: any) => p.status === 'ABERTA').length
++            const licenciado = !!projeto.licenca
++
++            return (
++              <Link
++                key={projeto.id}
++                href={`/acompanhamento/${projeto.id}`}
++                className="group bg-white rounded-2xl border border-gray-100 hover:border-green-200 hover:shadow-md transition-all duration-200 overflow-hidden flex flex-col"
++              >
++                {licenciado && <div className="bg-green-500 h-1 w-full" />}
++
++                <div className="p-5 flex-1 flex flex-col">
++                  {/* Topo: resumo do projeto + status */}
++                  <div className="flex items-start justify-between mb-3">
++                    <div className="min-w-0 flex-1">
++                      <span className="font-mono text-xs text-gray-400">{projeto.codigo}</span>
++                      <p className="font-semibold text-gray-900 mt-0.5 group-hover:text-green-700 transition-colors leading-snug">
++                        {projeto.imovelNome || projeto.cliente?.nome}
++                      </p>
++                      <p className="text-xs text-gray-500 mt-0.5">{servicoPrestado(projeto)}</p>
++                    </div>
++                    <div className="flex flex-col items-end gap-1 flex-shrink-0 ml-2">
++                      {licenciado ? (
++                        <span className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full bg-green-100 text-green-800">
++                          <Award className="w-3 h-3" /> Licenciado
++                        </span>
++                      ) : (
++                        <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">
++                          Em processo
++                        </span>
++                      )}
++                      {pendenciasAbertas > 0 && (
++                        <span className="flex items-center gap-1 text-xs font-semibold text-red-600">
++                          <AlertCircle className="w-3 h-3" /> {pendenciasAbertas} pendência(s)
++                        </span>
++                      )}
++                    </div>
++                  </div>
++
++                  <div className="space-y-1.5 flex-1">
++                    {projeto.imovelNome && (
++                      <div className="flex items-center gap-2 text-xs text-gray-500">
++                        <Home className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
++                        <span>Fazenda: {projeto.imovelNome}</span>
++                      </div>
++                    )}
++                    {(projeto.municipio || projeto.estado) && (
++                      <div className="flex items-center gap-2 text-xs text-gray-500">
++                        <MapPin className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
++                        <span>{[projeto.municipio, projeto.estado].filter(Boolean).join(' / ')}</span>
++                      </div>
++                    )}
++                    {projeto.areaHectares && (
++                      <div className="flex items-center gap-2 text-xs text-gray-500">
++                        <BarChart2 className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
++                        <span>{Number(projeto.areaHectares).toLocaleString('pt-BR')} ha</span>
++                      </div>
++                    )}
++                    {projeto.car && (
++                      <div className="flex items-center gap-2 text-xs text-gray-500">
++                        <FileText className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
++                        <span className="truncate">CAR: {projeto.car}</span>
++                      </div>
++                    )}
++                  </div>
++
++                  {/* Rodapé: código do protocolo + ação */}
++                  <div className="mt-4 pt-3 border-t border-gray-50 flex items-center justify-between gap-2">
++                    <span className="text-xs text-gray-400 truncate">
++                      {projeto.protocoloCodigoOrgao ? `Protocolo: ${projeto.protocoloCodigoOrgao}` : 'Sem nº de protocolo'}
++                    </span>
++                    <span className="flex items-center gap-1 text-xs font-medium text-green-600 group-hover:gap-2 transition-all flex-shrink-0">
++                      Editar <ChevronRight className="w-4 h-4" />
++                    </span>
++                  </div>
++                </div>
++              </Link>
++            )
++          })}
++        </div>
++      )}
++    </div>
++  )
++}
+diff --git a/src/app/(dashboard)/bi/page.tsx b/src/app/(dashboard)/bi/page.tsx
+index 0c7db11..c88288b 100644
+--- a/src/app/(dashboard)/bi/page.tsx
++++ b/src/app/(dashboard)/bi/page.tsx
+@@ -71,6 +71,7 @@ export default function BIPage() {
+   const totaisFinanceiros   = dadosBi?.totais              ?? {}
+   const pagamentosPorForma  = dadosBi?.pagamentosPorForma  ?? []
+   const servicosContratados = dadosBi?.servicosContratados ?? []
++  const pendenciasPanorama  = dadosBi?.pendencias          ?? {}
+ 
+   return (
+     <div className="space-y-6">
+@@ -124,6 +125,28 @@ export default function BIPage() {
+         </div>
+       </div>
+ 
++      {/* Panorama de Pendências (Acompanhamento de Processos) */}
++      <div>
++        <div className="mb-3">
++          <h3 className="font-semibold text-gray-900">Pendências de Processos</h3>
++          <p className="text-xs text-gray-400 mt-0.5">Panorama geral dos processos em acompanhamento ambiental</p>
++        </div>
++        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
++          {[
++            { label: 'Pendências Abertas',     value: pendenciasPanorama.abertas     ?? 0, color: 'bg-amber-500' },
++            { label: 'A Vencer (≤ 7 dias)',     value: pendenciasPanorama.aVencer     ?? 0, color: 'bg-orange-500' },
++            { label: 'Atrasadas',               value: pendenciasPanorama.atrasadas   ?? 0, color: 'bg-red-600' },
++            { label: 'Respondidas',             value: pendenciasPanorama.respondidas ?? 0, color: 'bg-green-600' },
++          ].map((kpi) => (
++            <div key={kpi.label} className="bg-white rounded-2xl border border-gray-100 p-5">
++              <div className={`w-1.5 h-8 ${kpi.color} rounded-full mb-3`} />
++              <p className="text-3xl font-bold text-gray-900">{kpi.value}</p>
++              <p className="text-xs text-gray-400 mt-1">{kpi.label}</p>
++            </div>
++          ))}
++        </div>
++      </div>
++
+       {/* Gráficos */}
+       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+ 
+diff --git a/src/app/(dashboard)/operacional/[id]/page.tsx b/src/app/(dashboard)/operacional/[id]/page.tsx
+index 0ec0d33..2dc47fc 100644
+--- a/src/app/(dashboard)/operacional/[id]/page.tsx
++++ b/src/app/(dashboard)/operacional/[id]/page.tsx
+@@ -57,6 +57,10 @@ export default function ProjetoDetalhe() {
+   const [modalCredencial, setModalCredencial]     = useState<{ sistema: string } | null>(null)
+   const [credForm, setCredForm]                   = useState({ login: '', senha: '' })
+   const [salvandoCred, setSalvandoCred]           = useState(false)
++  // Modal de Protocolo (data + código do processo no órgão)
++  const [modalProtocolo, setModalProtocolo]       = useState(false)
++  const [protocoloForm, setProtocoloForm]         = useState({ data: '', codigoOrgao: '' })
++  const [salvandoProtocolo, setSalvandoProtocolo] = useState(false)
+ 
+   // Etapas que têm acesso ao módulo Operacional (após primeiro pagamento)
+   const ETAPAS_VALIDAS    = ['OPERACIONAL', 'EM_EXECUCAO', 'CONCLUIDO']
+@@ -240,6 +244,12 @@ export default function ProjetoDetalhe() {
+           const creds = projeto?.credenciais ? JSON.parse(projeto.credenciais) : {}
+           setCredForm({ login: creds.CTF?.login || '', senha: creds.CTF?.senha || '' })
+           setModalCredencial({ sistema: 'CTF' })
++        } else if (titulo.includes('PROTOCOLO')) {
++          setProtocoloForm({
++            data: projeto?.protocoloData ? projeto.protocoloData.split('T')[0] : HOJE_STR,
++            codigoOrgao: projeto?.protocoloCodigoOrgao || '',
++          })
++          setModalProtocolo(true)
+         }
+       }
+     } catch {
+@@ -270,6 +280,30 @@ export default function ProjetoDetalhe() {
+     finally { setSalvandoCred(false) }
+   }
+ 
++  // ── Salvar dados do Protocolo e mover projeto para Acompanhamento ──
++  async function salvarProtocolo() {
++    if (!protocoloForm.data || !protocoloForm.codigoOrgao.trim()) {
++      toast.error('Informe a data e o código do processo no órgão')
++      return
++    }
++    setSalvandoProtocolo(true)
++    try {
++      await fetch(`/api/projetos/${id}`, {
++        method: 'PATCH',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({
++          protocoloData: protocoloForm.data,
++          protocoloCodigoOrgao: protocoloForm.codigoOrgao.trim(),
++          emAcompanhamento: true,
++        }),
++      })
++      toast.success('Protocolo registrado! Projeto movido para Acompanhamento de Processos.')
++      setModalProtocolo(false)
++      router.push(`/acompanhamento/${id}`)
++    } catch { toast.error('Erro ao salvar protocolo') }
++    finally { setSalvandoProtocolo(false) }
++  }
++
+   // ── Nova tarefa avulsa ─────────────────────────────────────
+   async function criarTarefa() {
+     if (!formTarefa.titulo) { toast.error('Título obrigatório'); return }
+@@ -1406,6 +1440,77 @@ export default function ProjetoDetalhe() {
+           </div>
+         </div>
+       )}
++
++      {/* ══════════════════════════════════════════════════════
++          MODAL DE PROTOCOLO — aparece ao concluir a tarefa "Protocolo"
++          ══════════════════════════════════════════════════════ */}
++      {modalProtocolo && (
++        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
++          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
++            {/* Header */}
++            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
++              <div>
++                <h2 className="font-bold text-gray-900">📋 Protocolo do Processo</h2>
++                <p className="text-xs text-gray-500 mt-0.5">
++                  Registre a data e o código do processo no órgão ambiental
++                </p>
++              </div>
++              <button
++                onClick={() => setModalProtocolo(false)}
++                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
++              >
++                ✕
++              </button>
++            </div>
++
++            {/* Formulário */}
++            <div className="px-6 py-5 space-y-4">
++              <div>
++                <label className="block text-sm font-medium text-gray-700 mb-1.5">Data do Protocolo</label>
++                <input
++                  type="date"
++                  value={protocoloForm.data}
++                  max={HOJE_STR}
++                  onChange={e => setProtocoloForm(p => ({ ...p, data: e.target.value }))}
++                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
++                  autoFocus
++                />
++              </div>
++              <div>
++                <label className="block text-sm font-medium text-gray-700 mb-1.5">Código do Processo no Órgão</label>
++                <input
++                  type="text"
++                  value={protocoloForm.codigoOrgao}
++                  onChange={e => setProtocoloForm(p => ({ ...p, codigoOrgao: e.target.value }))}
++                  placeholder="Ex: 2026.001234/SEMA"
++                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
++                />
++              </div>
++              <p className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2">
++                ✅ Após salvar, este projeto passará a aparecer em <strong>Acompanhamento de Processos</strong>.
++              </p>
++            </div>
++
++            {/* Ações */}
++            <div className="px-6 pb-5 flex gap-2">
++              <button
++                onClick={salvarProtocolo}
++                disabled={salvandoProtocolo}
++                className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold transition-colors"
++              >
++                {salvandoProtocolo ? <Loader2 className="w-4 h-4 animate-spin" /> : '💾'}
++                Salvar e Acompanhar
++              </button>
++              <button
++                onClick={() => setModalProtocolo(false)}
++                className="px-5 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm font-medium"
++              >
++                Pular
++              </button>
++            </div>
++          </div>
++        </div>
++      )}
+     </div>
+   )
+ }
+diff --git a/src/app/api/acoes/route.ts b/src/app/api/acoes/route.ts
+new file mode 100644
+index 0000000..bb38f70
+--- /dev/null
++++ b/src/app/api/acoes/route.ts
+@@ -0,0 +1,81 @@
++import { NextRequest, NextResponse } from 'next/server'
++import { prisma } from '@/lib/prisma'
++import { getCurrentUser } from '@/lib/auth'
++
++// PATCH /api/acoes — marca/desmarca uma ação como concluída
++// Quando todas as ações de uma pendência ficam concluídas, a pendência é
++// automaticamente marcada como CONCLUIDA e recebe a data de entrega.
++// Pendências já concluídas ficam somente leitura (não aceitam novo toggle).
++export async function PATCH(request: NextRequest) {
++  try {
++    const user = await getCurrentUser()
++    if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
++
++    const body = await request.json()
++    const { id, concluida } = body
++    if (!id) return NextResponse.json({ error: 'ID da ação é obrigatório' }, { status: 400 })
++
++    const acaoAtual = await prisma.acaoPendencia.findUnique({
++      where: { id },
++      include: { pendencia: true },
++    })
++    if (!acaoAtual) return NextResponse.json({ error: 'Ação não encontrada' }, { status: 404 })
++
++    if (acaoAtual.pendencia.status === 'CONCLUIDA') {
++      return NextResponse.json(
++        { error: 'Esta pendência já foi concluída e está disponível apenas para leitura.' },
++        { status: 403 }
++      )
++    }
++
++    const novoValor = concluida !== undefined ? concluida === true : !acaoAtual.concluida
++
++    const acao = await prisma.acaoPendencia.update({
++      where: { id },
++      data: {
++        concluida: novoValor,
++        dataConclusao: novoValor ? new Date() : null,
++      },
++      include: { responsavel: { select: { id: true, nome: true } } },
++    })
++
++    // ── Verifica se todas as ações da pendência foram concluídas ─────────
++    const todasAcoes = await prisma.acaoPendencia.findMany({
++      where: { pendenciaId: acaoAtual.pendenciaId },
++      select: { concluida: true },
++    })
++    const todasConcluidas = todasAcoes.length > 0 && todasAcoes.every(a => a.concluida)
++
++    let pendenciaAtualizada = null
++    if (todasConcluidas) {
++      pendenciaAtualizada = await prisma.pendencia.update({
++        where: { id: acaoAtual.pendenciaId },
++        data: { status: 'CONCLUIDA', dataEntrega: new Date() },
++        include: {
++          acoes: { include: { responsavel: { select: { id: true, nome: true } } } },
++          projeto: { select: { id: true, codigo: true, imovelNome: true, gestorResponsavelId: true, responsavelId: true } },
++        },
++      })
++
++      const destinatarios = Array.from(new Set(
++        [pendenciaAtualizada.projeto.gestorResponsavelId, pendenciaAtualizada.projeto.responsavelId].filter(Boolean)
++      )) as string[]
++      if (destinatarios.length > 0) {
++        await prisma.notificacao.createMany({
++          data: destinatarios.map(uid => ({
++            usuarioId: uid,
++            titulo: '✅ Pendência concluída',
++            mensagem: `Projeto ${pendenciaAtualizada!.projeto.codigo} — pedido ${pendenciaAtualizada!.numeroPedido}: todas as ações foram concluídas.`,
++            tipo: 'success',
++            link: `/acompanhamento/${pendenciaAtualizada!.projeto.id}`,
++          })),
++        }).catch(() => {})
++      }
++    }
++
++    return NextResponse.json({ acao, pendencia: pendenciaAtualizada })
++  } catch (error) {
++    console.error('Erro ao atualizar ação:', error)
++    return NextResponse.json({ error: 'Erro interno' }, { status: 500 })
++  }
++}
+diff --git a/src/app/api/bi/route.ts b/src/app/api/bi/route.ts
+index aaf935a..f3615bd 100644
+--- a/src/app/api/bi/route.ts
++++ b/src/app/api/bi/route.ts
+@@ -8,6 +8,10 @@ export async function GET(request: NextRequest) {
+     if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
+ 
+     const hoje = new Date()
++    const inicioHoje = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate())
++    const fimSeteDias = new Date(inicioHoje)
++    fimSeteDias.setDate(fimSeteDias.getDate() + 7)
++    fimSeteDias.setHours(23, 59, 59, 999)
+ 
+     // ── Evolução financeira dos últimos 6 meses ─────────────────────────────
+     const evolucaoFinanceira = []
+@@ -105,6 +109,38 @@ export async function GET(request: NextRequest) {
+       .map(([nome, { qtd, valor }]) => ({ nome, qtd, valor }))
+       .sort((a, b) => b.qtd - a.qtd)
+ 
++    // ── Panorama de Pendências (Acompanhamento de Processos) ────────────────
++    // Considera apenas pendências de projetos atualmente em acompanhamento
++    const filtroProjetoAcompanhamento = { projeto: { emAcompanhamento: true } }
++
++    const [
++      pendenciasAbertas,
++      pendenciasAVencer,
++      pendenciasAtrasadas,
++      pendenciasRespondidas,
++    ] = await Promise.all([
++      prisma.pendencia.count({
++        where: { status: 'ABERTA', ...filtroProjetoAcompanhamento },
++      }),
++      prisma.pendencia.count({
++        where: {
++          status: 'ABERTA',
++          prazoResposta: { gte: inicioHoje, lte: fimSeteDias },
++          ...filtroProjetoAcompanhamento,
++        },
++      }),
++      prisma.pendencia.count({
++        where: {
++          status: 'ABERTA',
++          prazoResposta: { lt: inicioHoje },
++          ...filtroProjetoAcompanhamento,
++        },
++      }),
++      prisma.pendencia.count({
++        where: { status: 'CONCLUIDA', ...filtroProjetoAcompanhamento },
++      }),
++    ])
++
+     return NextResponse.json({
+       evolucaoFinanceira,
+       totais: {
+@@ -121,6 +157,12 @@ export async function GET(request: NextRequest) {
+         qtd:    p._count,
+       })),
+       servicosContratados,
++      pendencias: {
++        abertas:     pendenciasAbertas,
++        aVencer:     pendenciasAVencer,
++        atrasadas:   pendenciasAtrasadas,
++        respondidas: pendenciasRespondidas,
++      },
+     })
+   } catch (error) {
+     console.error('Erro na API BI:', error)
+diff --git a/src/app/api/licencas/route.ts b/src/app/api/licencas/route.ts
+new file mode 100644
+index 0000000..27abf30
+--- /dev/null
++++ b/src/app/api/licencas/route.ts
+@@ -0,0 +1,71 @@
++import { NextRequest, NextResponse } from 'next/server'
++import { prisma } from '@/lib/prisma'
++import { getCurrentUser } from '@/lib/auth'
++
++// POST /api/licencas — concede/atualiza a licença de um projeto (1:1, upsert por projetoId)
++export async function POST(request: NextRequest) {
++  try {
++    const user = await getCurrentUser()
++    if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
++
++    const body = await request.json()
++    const { projetoId, numero, dataEmissao, dataValidade, condicionantes, documentoUrl } = body
++
++    if (!projetoId || !numero || !dataEmissao) {
++      return NextResponse.json(
++        { error: 'Projeto, número da licença e data de emissão são obrigatórios' },
++        { status: 400 }
++      )
++    }
++
++    const projeto = await prisma.projeto.findUnique({ where: { id: projetoId } })
++    if (!projeto) return NextResponse.json({ error: 'Projeto não encontrado' }, { status: 404 })
++
++    const licenca = await prisma.licenca.upsert({
++      where: { projetoId },
++      update: {
++        numero,
++        dataEmissao: new Date(dataEmissao),
++        dataValidade: dataValidade ? new Date(dataValidade) : null,
++        condicionantes: condicionantes || null,
++        documentoUrl: documentoUrl || null,
++      },
++      create: {
++        projetoId,
++        numero,
++        dataEmissao: new Date(dataEmissao),
++        dataValidade: dataValidade ? new Date(dataValidade) : null,
++        condicionantes: condicionantes || null,
++        documentoUrl: documentoUrl || null,
++      },
++    })
++
++    const destinatarios = [projeto.gestorResponsavelId, projeto.responsavelId].filter(Boolean) as string[]
++    if (destinatarios.length > 0) {
++      await prisma.notificacao.createMany({
++        data: Array.from(new Set(destinatarios)).map(uid => ({
++          usuarioId: uid,
++          titulo: '🎉 Licença concedida',
++          mensagem: `Projeto ${projeto.codigo} — licença nº ${numero} foi emitida.`,
++          tipo: 'success',
++          link: `/acompanhamento/${projetoId}`,
++        })),
++      }).catch(() => {})
++    }
++
++    await prisma.log.create({
++      data: {
++        usuarioId: user.id,
++        acao: 'CONCEDER_LICENCA',
++        entidade: 'Licenca',
++        entidadeId: licenca.id,
++        detalhes: `Licença nº ${numero} registrada para o projeto ${projeto.codigo}`,
++      },
++    }).catch(() => {})
++
++    return NextResponse.json({ licenca }, { status: 201 })
++  } catch (error) {
++    console.error('Erro ao registrar licença:', error)
++    return NextResponse.json({ error: 'Erro interno' }, { status: 500 })
++  }
++}
+diff --git a/src/app/api/pendencias/route.ts b/src/app/api/pendencias/route.ts
+new file mode 100644
+index 0000000..0aef75b
+--- /dev/null
++++ b/src/app/api/pendencias/route.ts
+@@ -0,0 +1,112 @@
++import { NextRequest, NextResponse } from 'next/server'
++import { prisma } from '@/lib/prisma'
++import { getCurrentUser } from '@/lib/auth'
++
++// GET /api/pendencias?projetoId=...
++export async function GET(request: NextRequest) {
++  try {
++    const user = await getCurrentUser()
++    if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
++
++    const { searchParams } = new URL(request.url)
++    const projetoId = searchParams.get('projetoId')
++
++    const where: any = {}
++    if (projetoId) where.projetoId = projetoId
++
++    const pendencias = await prisma.pendencia.findMany({
++      where,
++      include: {
++        acoes: {
++          orderBy: { criadoEm: 'asc' },
++          include: { responsavel: { select: { id: true, nome: true } } }
++        }
++      },
++      orderBy: { criadoEm: 'desc' },
++    })
++
++    return NextResponse.json({ pendencias })
++  } catch (error) {
++    console.error('Erro ao buscar pendências:', error)
++    return NextResponse.json({ error: 'Erro interno' }, { status: 500 })
++  }
++}
++
++// POST /api/pendencias — cria uma nova pendência com sua lista de ações
++export async function POST(request: NextRequest) {
++  try {
++    const user = await getCurrentUser()
++    if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
++
++    const body = await request.json()
++    const { projetoId, numeroPedido, data, prazoResposta, acoes } = body
++
++    if (!projetoId || !numeroPedido || !data || !prazoResposta) {
++      return NextResponse.json(
++        { error: 'Número do pedido, data e prazo de resposta são obrigatórios' },
++        { status: 400 }
++      )
++    }
++    if (!Array.isArray(acoes) || acoes.length === 0) {
++      return NextResponse.json({ error: 'Inclua pelo menos uma ação' }, { status: 400 })
++    }
++    for (const a of acoes) {
++      if (!a.descricao || !a.descricao.trim()) {
++        return NextResponse.json({ error: 'Toda ação precisa de uma descrição' }, { status: 400 })
++      }
++    }
++
++    const projeto = await prisma.projeto.findUnique({ where: { id: projetoId } })
++    if (!projeto) return NextResponse.json({ error: 'Projeto não encontrado' }, { status: 404 })
++
++    const pendencia = await prisma.pendencia.create({
++      data: {
++        projetoId,
++        numeroPedido,
++        data: new Date(data),
++        prazoResposta: new Date(prazoResposta),
++        status: 'ABERTA',
++        acoes: {
++          create: acoes.map((a: any) => ({
++            descricao: a.descricao,
++            responsavelId: a.responsavelId || null,
++          })),
++        },
++      },
++      include: {
++        acoes: { include: { responsavel: { select: { id: true, nome: true } } } }
++      },
++    })
++
++    // Notifica os responsáveis designados em cada ação
++    const responsavelIds = Array.from(
++      new Set(acoes.map((a: any) => a.responsavelId).filter(Boolean))
++    ) as string[]
++    if (responsavelIds.length > 0) {
++      await prisma.notificacao.createMany({
++        data: responsavelIds.map(uid => ({
++          usuarioId: uid,
++          titulo: '📌 Nova pendência no processo',
++          mensagem: `Projeto ${projeto.codigo} — ${projeto.imovelNome || projeto.tipoServico}: pedido ${numeroPedido}. Prazo de resposta: ${new Date(prazoResposta).toLocaleDateString('pt-BR')}.`,
++          tipo: 'info',
++          link: `/acompanhamento/${projetoId}`,
++        })),
++      }).catch(() => {})
++    }
++
++    await prisma.log.create({
++      data: {
++        usuarioId: user.id,
++        acao: 'CRIAR_PENDENCIA',
++        entidade: 'Pendencia',
++        entidadeId: pendencia.id,
++        detalhes: `Pedido ${numeroPedido} criado no projeto ${projeto.codigo}`,
++      },
++    }).catch(() => {})
++
++    return NextResponse.json({ pendencia }, { status: 201 })
++  } catch (error) {
++    console.error('Erro ao criar pendência:', error)
++    return NextResponse.json({ error: 'Erro interno' }, { status: 500 })
++  }
++}
+diff --git a/src/app/api/projetos/[id]/route.ts b/src/app/api/projetos/[id]/route.ts
+index 30e08e1..4ca0cf2 100644
+--- a/src/app/api/projetos/[id]/route.ts
++++ b/src/app/api/projetos/[id]/route.ts
+@@ -132,7 +132,17 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
+         historico: {
+           orderBy: { criadoEm: 'desc' },
+           take: 20,
+-        }
++        },
++        pendencias: {
++          orderBy: { criadoEm: 'desc' },
++          include: {
++            acoes: {
++              orderBy: { criadoEm: 'asc' },
++              include: { responsavel: { select: { id: true, nome: true } } }
++            }
++          }
++        },
++        licenca: true,
+       }
+     })
+ 
+@@ -274,6 +284,9 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
+         ...(body.dataInicio !== undefined && { dataInicio: body.dataInicio ? new Date(body.dataInicio) : null }),
+         ...(body.dataConclusao !== undefined && { dataConclusao: body.dataConclusao ? new Date(body.dataConclusao) : null }),
+         ...(body.dataAprovacao !== undefined && { dataAprovacao: body.dataAprovacao ? new Date(body.dataAprovacao) : null }),
++        ...(body.protocoloData !== undefined && { protocoloData: body.protocoloData ? new Date(body.protocoloData) : null }),
++        ...(body.protocoloCodigoOrgao !== undefined && { protocoloCodigoOrgao: body.protocoloCodigoOrgao || null }),
++        ...(body.emAcompanhamento !== undefined && { emAcompanhamento: body.emAcompanhamento === true }),
+       },
+       include: {
+         cliente: true,
+diff --git a/src/app/api/projetos/route.ts b/src/app/api/projetos/route.ts
+index dbd0658..803dc92 100644
+--- a/src/app/api/projetos/route.ts
++++ b/src/app/api/projetos/route.ts
+@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
+     const analistaRapidoId = searchParams.get('analistaRapidoId')
+     const responsavelId = searchParams.get('responsavelId')
+     const search = searchParams.get('search')
++    const emAcompanhamento = searchParams.get('emAcompanhamento')
+     const limit = parseInt(searchParams.get('limit') || '50')
+     const page = parseInt(searchParams.get('page') || '1')
+ 
+@@ -27,6 +28,7 @@ export async function GET(request: NextRequest) {
+     if (clienteId) where.clienteId = clienteId
+     if (analistaRapidoId) where.analistaRapidoId = analistaRapidoId
+     if (responsavelId) where.responsavelId = responsavelId
++    if (emAcompanhamento === 'true') where.emAcompanhamento = true
+     if (search) {
+       where.OR = [
+         { codigo: { contains: search } },
+@@ -52,6 +54,8 @@ export async function GET(request: NextRequest) {
+           supervisor: { select: { id: true, nome: true } },
+           analistaRapido: { select: { id: true, nome: true } },
+           contrato: { select: { id: true, statusContrato: true, valorTotal: true } },
++          licenca: { select: { id: true, numero: true, dataEmissao: true, dataValidade: true } },
++          pendencias: { select: { id: true, status: true } },
+           _count: { select: { tarefas: true, vistorias: true, documentos: true } },
+         },
+         orderBy: { criadoEm: 'desc' },
+diff --git a/src/components/layout/Sidebar.tsx b/src/components/layout/Sidebar.tsx
+index 4ee104f..22b628a 100644
+--- a/src/components/layout/Sidebar.tsx
++++ b/src/components/layout/Sidebar.tsx
+@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
+ import {
+   LayoutDashboard, Briefcase, FileText, Settings,
+   ClipboardList, MapPin, DollarSign, CheckSquare,
+-  BarChart3, ChevronLeft, ChevronRight, X
++  BarChart3, ChevronLeft, ChevronRight, X, FileSearch
+ } from 'lucide-react'
+ import { cn } from '@/lib/utils'
+ 
+@@ -35,6 +35,12 @@ const navItems = [
+     icon: ClipboardList,
+     modulo: 'operacional',
+   },
++  {
++    href: '/acompanhamento',
++    label: 'Acompanhamento de Processos',
++    icon: FileSearch,
++    modulo: 'acompanhamento',
++  },
+   {
+     href: '/campo',
+     label: 'Gestão Campo',
+diff --git a/src/lib/auth.ts b/src/lib/auth.ts
+index 3b43e16..385e65f 100644
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -92,6 +92,7 @@ export const MODULE_ACCESS: Record<string, string[]> = {
+   comercial: ['GESTAO_GERAL', 'COMERCIAL', 'CONTRATOS'],
+   contratos: ['GESTAO_GERAL', 'COMERCIAL', 'FINANCEIRO', 'CONTRATOS'],
+   operacional: ['GESTAO_GERAL', 'OPERACIONAL_AMBIENTAL', 'OPERACIONAL_REGULARIZACAO'],
++  acompanhamento: ['GESTAO_GERAL', 'OPERACIONAL_AMBIENTAL', 'OPERACIONAL_REGULARIZACAO'],
+   campo: ['GESTAO_GERAL', 'GESTAO_CAMPO', 'OPERACIONAL_AMBIENTAL', 'OPERACIONAL_REGULARIZACAO'],
+   financeiro: ['GESTAO_GERAL', 'FINANCEIRO', 'COMERCIAL'],
+   configuracoes: ['GESTAO_GERAL'],
+diff --git a/src/lib/utils.ts b/src/lib/utils.ts
+index 1c876a7..259ff1f 100644
+--- a/src/lib/utils.ts
++++ b/src/lib/utils.ts
+@@ -86,6 +86,11 @@ export const STATUS_TAREFA_LABELS: Record<string, string> = {
+   AGUARDANDO: 'Aguardando',
+ }
+ 
++export const STATUS_PENDENCIA_LABELS: Record<string, string> = {
++  ABERTA: 'Aberta',
++  CONCLUIDA: 'Concluída',
++}
++
+ export const STATUS_COLORS: Record<string, string> = {
+   // Comercial
+   RECEBIDO: 'bg-blue-100 text-blue-800',
+@@ -111,6 +116,8 @@ export const STATUS_COLORS: Record<string, string> = {
+   PAGO: 'bg-green-100 text-green-800',
+   VENCIDO: 'bg-red-100 text-red-800',
+   PARCIAL: 'bg-orange-100 text-orange-800',
++  // Pendências (Acompanhamento de Processos)
++  ABERTA: 'bg-amber-100 text-amber-800',
+ }
+ 
+ export const ROLE_LABELS: Record<string, string> = {
+@@ -146,10 +153,10 @@ export const MODULOS_POR_ROLE: Record<string, string[] | null> = {
+   ADMIN:                  null,
+   GESTOR_GERAL:           null,
+   GESTOR_ADMINISTRATIVO:  ['dashboard', 'comercial', 'contratos', 'financeiro', 'encerramento', 'configuracoes'],
+-  GESTOR_OPERACIONAL:     ['dashboard', 'comercial', 'operacional', 'campo', 'encerramento'],
++  GESTOR_OPERACIONAL:     ['dashboard', 'comercial', 'operacional', 'acompanhamento', 'campo', 'encerramento'],
+   GESTOR_CAMPO:           ['dashboard', 'campo', 'tecnico'],
+-  SUPERVISOR:             ['dashboard', 'comercial', 'operacional'],
+-  ANALISTA:               ['dashboard', 'operacional'],
++  SUPERVISOR:             ['dashboard', 'comercial', 'operacional', 'acompanhamento'],
++  ANALISTA:               ['dashboard', 'operacional', 'acompanhamento'],
+   ANALISTA_RAPIDO:        ['dashboard', 'comercial'],
+   TECNICO_CAMPO:          ['dashboard', 'tecnico'],
+ }

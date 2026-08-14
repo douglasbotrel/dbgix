@@ -1,0 +1,250 @@
+// dbgix - Schema do Banco de Dados
+// Versão reduzida do Ecdise: Dashboard, Tarefas da Semana, Operacional, BI/Relatórios, Cadastro Base
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// USUÁRIOS E PERMISSÕES
+// Role: ADMIN | GESTOR_GERAL | GESTOR_ADMINISTRATIVO | GESTOR_OPERACIONAL | GESTOR_CAMPO | SUPERVISOR | ANALISTA | ANALISTA_RAPIDO | TECNICO_CAMPO
+// Departamento: GESTAO_GERAL | OPERACIONAL_AMBIENTAL | OPERACIONAL_REGULARIZACAO | BI
+// ============================================================
+
+model Usuario {
+  id            String   @id @default(cuid())
+  nome          String
+  email         String   @unique
+  senha         String
+  cargo         String?
+  telefone      String?
+  avatar        String?
+  role          String   @default("ANALISTA")
+  departamento  String   @default("OPERACIONAL_AMBIENTAL")
+  modulosAcesso String?  // JSON: ["dashboard","operacional",...]
+  ativo         Boolean  @default(true)
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  projetosResponsavel    Projeto[]   @relation("ProjetoResponsavel")
+  projetosSupervisor     Projeto[]   @relation("ProjetoSupervisor")
+  projetosAnalistaRapido Projeto[]   @relation("ProjetoAnalistaRapido")
+  tarefasResponsavel     Tarefa[]    @relation("TarefaResponsavel")
+  documentosUpload       Documento[]
+  notificacoes           Notificacao[]
+  logs                   Log[]
+  comentarios            Comentario[]
+  tarefasSemana          TarefaSemana[]
+
+  @@map("usuarios")
+}
+
+// ============================================================
+// PROJETOS
+// Ponto de entrada único: um Projeto nasce direto em etapaPipeline=OPERACIONAL
+// (criado pela tela Operacional). Não existe mais esteira comercial/contrato/financeiro,
+// nem cadastro de cliente/imóvel/tipo de serviço — só o essencial: nome, responsável,
+// prazo, tarefas e observações.
+// statusOperacional: NAO_INICIADO | EM_ANDAMENTO | EM_CAMPO | AGUARDANDO_INFO | EM_REVISAO | CONCLUIDO | CANCELADO
+// etapaPipeline: OPERACIONAL | EM_EXECUCAO | CONCLUIDO | CANCELADO
+// ============================================================
+
+model Projeto {
+  id                   String   @id @default(cuid())
+  codigo               String   @unique @default(cuid())
+  nome                 String
+  statusOperacional    String   @default("NAO_INICIADO")
+  descricao            String?
+  observacoes          String?
+  dataEntrada          DateTime @default(now())
+  dataInicio           DateTime?
+  dataPrazo            DateTime?
+  dataConclusao        DateTime?
+  responsavelId        String?
+  supervisorId         String?
+  analistaRapidoId     String?
+  gestorResponsavelId  String?
+  etapaPipeline        String   @default("OPERACIONAL")
+  // Protocolo e credenciais do sistema regulatório (preenchidos ao final da execução em Operacional)
+  credenciais          String?  // JSON: {"SIGLA":{"login":"...","senha":"..."},"CTF":{...}}
+  protocoloData        DateTime?
+  protocoloCodigoOrgao String?
+  criadoEm            DateTime @default(now())
+  atualizadoEm        DateTime @updatedAt
+
+  responsavel    Usuario?  @relation("ProjetoResponsavel",    fields: [responsavelId],    references: [id])
+  supervisor     Usuario?  @relation("ProjetoSupervisor",     fields: [supervisorId],     references: [id])
+  analistaRapido Usuario?  @relation("ProjetoAnalistaRapido", fields: [analistaRapidoId], references: [id])
+  tarefas        Tarefa[]
+  documentos     Documento[]
+  comentarios    Comentario[]
+  historico      HistoricoStatus[]
+
+  @@map("projetos")
+}
+
+// ============================================================
+// TAREFAS
+// tipo: ETAPA | TAREFA | MARCO | ENTREGA
+// status: PENDENTE | EM_ANDAMENTO | CONCLUIDA | ATRASADA | CANCELADA | AGUARDANDO
+// ============================================================
+
+model Tarefa {
+  id            String   @id @default(cuid())
+  projetoId     String
+  titulo        String
+  descricao     String?
+  observacao    String?  // Nota de tentativa: motivo pelo qual a tarefa não pôde ser concluída
+  tipo          String   @default("TAREFA")
+  status        String   @default("PENDENTE")
+  responsavelId String?
+  prazo         DateTime?
+  dataConclusao DateTime?
+  ordem         Int      @default(0)
+  etapa         String?
+  obrigatorio   Boolean  @default(false)
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  projeto     Projeto   @relation(fields: [projetoId], references: [id])
+  responsavel Usuario?  @relation("TarefaResponsavel", fields: [responsavelId], references: [id])
+  documentos  Documento[]
+  planejamentosSemana TarefaSemana[]
+
+  @@map("tarefas")
+}
+
+// ============================================================
+// DOCUMENTOS
+// ============================================================
+
+model Documento {
+  id           String   @id @default(cuid())
+  nome         String
+  tipo         String?
+  categoria    String?
+  url          String
+  driveFileId  String?
+  tamanho      Int?
+  projetoId    String?
+  tarefaId     String?
+  uploadadoPor String?
+  criadoEm    DateTime @default(now())
+
+  projeto  Projeto?  @relation(fields: [projetoId],    references: [id])
+  tarefa   Tarefa?   @relation(fields: [tarefaId],     references: [id])
+  usuario  Usuario?  @relation(fields: [uploadadoPor], references: [id])
+
+  @@map("documentos")
+}
+
+// ============================================================
+// COMUNICAÇÃO E LOGS
+// ============================================================
+
+model Notificacao {
+  id        String   @id @default(cuid())
+  usuarioId String
+  titulo    String
+  mensagem  String
+  tipo      String   @default("info")
+  lida      Boolean  @default(false)
+  link      String?
+  criadoEm DateTime @default(now())
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
+
+  @@map("notificacoes")
+}
+
+model Comentario {
+  id        String   @id @default(cuid())
+  projetoId String
+  autorId   String
+  texto     String
+  criadoEm DateTime @default(now())
+
+  projeto Projeto @relation(fields: [projetoId], references: [id])
+  autor   Usuario @relation(fields: [autorId],   references: [id])
+
+  @@map("comentarios")
+}
+
+model Log {
+  id         String   @id @default(cuid())
+  usuarioId  String?
+  acao       String
+  entidade   String
+  entidadeId String?
+  detalhes   String?
+  ip         String?
+  criadoEm  DateTime @default(now())
+
+  usuario Usuario? @relation(fields: [usuarioId], references: [id])
+
+  @@map("logs")
+}
+
+model HistoricoStatus {
+  id             String   @id @default(cuid())
+  projetoId      String
+  statusAnterior String?
+  statusNovo     String
+  campo          String   @default("statusOperacional")
+  observacao     String?
+  usuarioId      String?
+  criadoEm      DateTime @default(now())
+
+  projeto Projeto @relation(fields: [projetoId], references: [id])
+
+  @@map("historico_status")
+}
+
+// ============================================================
+// PLANEJAMENTO SEMANAL DE TAREFAS
+// Seleção leve: qual tarefa o usuário escolheu fazer em qual semana.
+// NÃO duplica dados da tarefa — a conclusão é lida direto da Tarefa
+// (status/dataConclusao) já existente. Serve só para: (1) organizar a
+// rotina do usuário e (2) gerar o KPI de cumprimento semanal por usuário.
+// ============================================================
+
+model TarefaSemana {
+  id           String   @id @default(cuid())
+  tarefaId     String
+  usuarioId    String
+  semanaInicio DateTime // segunda-feira (00:00) da semana em que foi planejada
+  diaSemana    Int?     // 0=Segunda .. 6=Domingo — null = "qualquer dia da semana"
+  criadoEm     DateTime @default(now())
+
+  tarefa  Tarefa  @relation(fields: [tarefaId], references: [id])
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
+
+  @@unique([tarefaId, usuarioId, semanaInicio])
+  @@map("tarefas_semana")
+}
+
+// ============================================================
+// CATÁLOGO DE SERVIÇOS
+// Alimenta a geração automática de tarefas quando um projeto é criado
+// (campo tarefasPadrao: JSON com a lista de tarefas padrão do serviço).
+// ============================================================
+
+model TipoServico {
+  id                   String   @id @default(cuid())
+  nome                 String   @unique
+  categoria            String
+  descricao            String?
+  documentosRequeridos String?
+  tarefasPadrao        String?
+  ativo                Boolean  @default(true)
+  ordem                Int      @default(0)
+  criadoEm            DateTime @default(now())
+  atualizadoEm        DateTime @updatedAt
+
+  @@map("tipos_servico")
+}

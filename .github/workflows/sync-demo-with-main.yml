@@ -1,0 +1,35 @@
+name: Sincronizar demo com main
+
+# Sempre que main receber um push, este workflow atualiza o branch "demo"
+# para o mesmo estado de "main" automaticamente (fast-forward).
+# Assim, Douglas trabalha só em "main" e "demo" se mantém sempre igual,
+# sem precisar lembrar de mesclar manualmente.
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  sync-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repositório completo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configurar usuário do Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Avançar demo até main (fast-forward)
+        run: |
+          git fetch origin main demo
+          git checkout -B demo origin/main
+          git push origin demo --force-with-lease
