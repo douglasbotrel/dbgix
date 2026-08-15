@@ -14,6 +14,12 @@ function segundaFeiraDaSemana(data: Date): Date {
   return d
 }
 
+// 0=Segunda .. 6=Domingo — mesmo índice usado em diaSemana/DIAS_NOME no front-end
+function diaDeHojeIndex(): number {
+  const dia = new Date().getDay()
+  return dia === 0 ? 6 : dia - 1
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser()
@@ -127,6 +133,15 @@ export async function POST(request: NextRequest) {
 // de um item já planejado. Quem pode editar: o próprio dono do item (analista)
 // ou um gestor (PODE_VER_OUTROS) — mesma regra dos outros endpoints desta rota,
 // já que a missão do dia pode ser definida pelo gestor OU pelo analista.
+//
+// Regras da missão do dia:
+// - É sempre HOJE — ao marcar, o servidor já entende qual dia é hoje e move o
+//   item para lá, não precisa escolher o dia manualmente antes.
+// - Só existe para a semana atual (não faz sentido em semanas passadas/futuras).
+// - Só uma por usuário/dia. Um gestor pode definir/trocar a de qualquer
+//   subordinado a qualquer momento. O próprio analista só pode definir a sua
+//   caso ainda não exista nenhuma registrada para hoje — não pode sobrescrever
+//   uma que o gestor (ou ele mesmo antes) já tenha definido.
 export async function PATCH(request: NextRequest) {
   try {
     const user = await getCurrentUser()
@@ -145,26 +160,48 @@ export async function PATCH(request: NextRequest) {
     const data: any = {}
     if (diaSemana !== undefined) data.diaSemana = diaSemana === null ? null : Number(diaSemana)
 
-    if (missaoDia !== undefined) {
-      const diaAlvo = diaSemana !== undefined ? (diaSemana === null ? null : Number(diaSemana)) : item.diaSemana
-      if (missaoDia && diaAlvo === null) {
-        return NextResponse.json({ error: 'Defina o dia da tarefa antes de marcar como missão do dia' }, { status: 400 })
+    if (missaoDia === true) {
+      const semanaAtual = segundaFeiraDaSemana(new Date())
+      if (item.semanaInicio.getTime() !== semanaAtual.getTime()) {
+        return NextResponse.json({ error: 'Só é possível marcar a missão do dia na semana atual' }, { status: 400 })
       }
-      data.missaoDia = Boolean(missaoDia)
+
+      // Missão do dia é sempre hoje — sobrescreve qualquer diaSemana enviado.
+      const diaHoje = diaDeHojeIndex()
+      data.diaSemana = diaHoje
+
+      const souGestor = PODE_VER_OUTROS.includes(user.role)
+      if (!souGestor) {
+        const existente = await prisma.tarefaSemana.findFirst({
+          where: {
+            usuarioId: item.usuarioId,
+            semanaInicio: item.semanaInicio,
+            diaSemana: diaHoje,
+            missaoDia: true,
+            id: { not: id },
+          },
+        })
+        if (existente) {
+          return NextResponse.json({ error: 'Já existe uma missão do dia registrada para hoje' }, { status: 409 })
+        }
+      }
+
+      data.missaoDia = true
+    } else if (missaoDia === false) {
+      data.missaoDia = false
     }
 
     if (justificativa !== undefined) data.justificativa = justificativa ? String(justificativa).trim() : null
 
-    // Só um item por usuário/dia/semana pode ser a "missão do dia" — ao marcar
-    // um novo, desmarca qualquer outro do mesmo dia nessa semana.
+    // Só um item por usuário/dia pode ser a "missão do dia" — ao marcar um
+    // novo (sempre hoje), desmarca qualquer outro que já fosse a de hoje.
     const atualizado = await prisma.$transaction(async tx => {
       if (data.missaoDia === true) {
-        const diaAlvo = data.diaSemana !== undefined ? data.diaSemana : item.diaSemana
         await tx.tarefaSemana.updateMany({
           where: {
             usuarioId: item.usuarioId,
             semanaInicio: item.semanaInicio,
-            diaSemana: diaAlvo,
+            diaSemana: data.diaSemana,
             missaoDia: true,
             id: { not: id },
           },

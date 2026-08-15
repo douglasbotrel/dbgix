@@ -209,10 +209,6 @@ export default function TarefasSemanaPage() {
   }
 
   async function alternarMissaoDia(p: any) {
-    if (!p.missaoDia && p.diaSemana === null) {
-      toast.error('Defina o dia da tarefa antes de marcar como missão do dia')
-      return
-    }
     setProcessando(p.id)
     try {
       const res = await fetch('/api/tarefas-semana', {
@@ -479,14 +475,22 @@ export default function TarefasSemanaPage() {
                                   </p>
                                 )}
                               </div>
-                              <button
-                                onClick={() => alternarMissaoDia(p)}
-                                disabled={processando === p.id}
-                                className={`p-1 flex-shrink-0 disabled:opacity-50 ${p.missaoDia ? 'text-amber-500 hover:text-amber-600' : 'text-gray-300 hover:text-amber-500'}`}
-                                title={p.missaoDia ? 'Remover missão do dia' : 'Marcar como missão do dia'}
-                              >
-                                <Star className={`w-4 h-4 ${p.missaoDia ? 'fill-amber-400' : ''}`} />
-                              </button>
+                              {(ehSemanaAtual || p.missaoDia) && (
+                                <button
+                                  onClick={() => alternarMissaoDia(p)}
+                                  disabled={processando === p.id || !ehSemanaAtual}
+                                  className={`p-1 flex-shrink-0 disabled:opacity-50 ${p.missaoDia ? 'text-amber-500 hover:text-amber-600' : 'text-gray-300 hover:text-amber-500'}`}
+                                  title={
+                                    p.missaoDia
+                                      ? 'Remover missão do dia'
+                                      : ehSemanaAtual
+                                        ? 'Marcar como missão de hoje'
+                                        : 'Só é possível marcar a missão do dia na semana atual'
+                                  }
+                                >
+                                  <Star className={`w-4 h-4 ${p.missaoDia ? 'fill-amber-400' : ''}`} />
+                                </button>
+                              )}
                               <button
                                 onClick={() => removerDaSemana(p.id)}
                                 disabled={processando === p.id}
