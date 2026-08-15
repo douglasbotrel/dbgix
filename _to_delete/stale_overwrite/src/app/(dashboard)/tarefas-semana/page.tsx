@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
 import {
   Plus, X, CheckCircle2, Circle, ChevronLeft, ChevronRight, ChevronDown,
-  Calendar, Loader2, Users, TrendingUp, AlertTriangle, Star, Target
+  Calendar, Loader2, Users, TrendingUp, AlertTriangle
 } from 'lucide-react'
 
 const ROLES_GESTAO = ['ADMIN', 'GESTOR_GERAL', 'GESTOR_OPERACIONAL', 'GESTOR_ADMINISTRATIVO', 'SUPERVISOR']
@@ -64,12 +64,6 @@ export default function TarefasSemanaPage() {
   const [kpi, setKpi] = useState<any>(null)
   const [carregandoKpi, setCarregandoKpi] = useState(false)
   const [colapsados, setColapsados] = useState<Record<string, boolean>>({})
-
-  // Justificativa obrigatória ao executar/não executar a "missão do dia"
-  const [modalJustificativa, setModalJustificativa] = useState<{
-    itemId: string; tarefaId: string; concluidaAtual: boolean; titulo: string
-  } | null>(null)
-  const [textoJustificativa, setTextoJustificativa] = useState('')
 
   const podeGerenciarEquipe = me && ROLES_GESTAO.includes(me.role)
 
@@ -163,65 +157,6 @@ export default function TarefasSemanaPage() {
       })
       if (!res.ok) { toast.error('Erro ao atualizar'); return }
       toast.success(concluida ? 'Reaberta' : 'Concluída! Também atualizado no Operacional.')
-      carregar()
-    } finally {
-      setProcessando(null)
-    }
-  }
-
-  // Clique no check de um item planejado: se for a "missão do dia", pede
-  // justificativa (executou ou não) antes de confirmar a mudança de status.
-  function clicarConcluir(p: any) {
-    if (p.missaoDia) {
-      setTextoJustificativa(p.justificativa || '')
-      setModalJustificativa({ itemId: p.id, tarefaId: p.itemId, concluidaAtual: p.concluida, titulo: p.titulo })
-      return
-    }
-    marcarConcluida(p.itemId, p.concluida)
-  }
-
-  async function confirmarJustificativa() {
-    if (!modalJustificativa) return
-    if (!textoJustificativa.trim()) { toast.error('Descreva o motivo antes de confirmar'); return }
-    setProcessando(modalJustificativa.itemId)
-    try {
-      await fetch('/api/tarefas-semana', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: modalJustificativa.itemId, justificativa: textoJustificativa.trim() }),
-      })
-      const res = await fetch('/api/tarefas', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: modalJustificativa.tarefaId,
-          status: modalJustificativa.concluidaAtual ? 'PENDENTE' : 'CONCLUIDA',
-        }),
-      })
-      if (!res.ok) { toast.error('Erro ao atualizar'); return }
-      toast.success('Justificativa salva!')
-      setModalJustificativa(null)
-      setTextoJustificativa('')
-      carregar()
-    } finally {
-      setProcessando(null)
-    }
-  }
-
-  async function alternarMissaoDia(p: any) {
-    if (!p.missaoDia && p.diaSemana === null) {
-      toast.error('Defina o dia da tarefa antes de marcar como missão do dia')
-      return
-    }
-    setProcessando(p.id)
-    try {
-      const res = await fetch('/api/tarefas-semana', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: p.id, missaoDia: !p.missaoDia }),
-      })
-      if (!res.ok) { const err = await res.json(); toast.error(err.error || 'Erro ao atualizar'); return }
-      toast.success(p.missaoDia ? 'Missão do dia removida' : 'Marcada como missão do dia!')
       carregar()
     } finally {
       setProcessando(null)
@@ -444,14 +379,12 @@ export default function TarefasSemanaPage() {
                         return (
                           <div
                             key={p.id}
-                            className={`rounded-xl border overflow-hidden ${
-                              p.missaoDia ? 'border-amber-200 bg-amber-50/50' : p.concluida ? 'border-green-100 bg-green-50/40' : 'border-gray-100'
-                            }`}
+                            className={`rounded-xl border overflow-hidden ${p.concluida ? 'border-green-100 bg-green-50/40' : 'border-gray-100'}`}
                           >
                             <div className="flex items-start gap-2 p-2.5">
                               <button
-                                onClick={() => clicarConcluir(p)}
-                                disabled={processando === p.itemId || processando === p.id}
+                                onClick={() => marcarConcluida(p.itemId, p.concluida)}
+                                disabled={processando === p.itemId}
                                 className="mt-0.5 flex-shrink-0 disabled:opacity-50"
                                 title={p.concluida ? 'Reabrir' : 'Marcar como concluída'}
                               >
@@ -461,11 +394,6 @@ export default function TarefasSemanaPage() {
                               </button>
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-1.5">
-                                  {p.missaoDia && (
-                                    <span className="flex items-center gap-0.5 text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                                      <Target className="w-2.5 h-2.5" /> MISSÃO DO DIA
-                                    </span>
-                                  )}
                                   <p className={`text-sm ${p.concluida ? 'text-gray-400 line-through' : 'text-gray-800'} truncate`}>
                                     {p.titulo}
                                   </p>
@@ -473,20 +401,7 @@ export default function TarefasSemanaPage() {
                                 <p className="text-xs text-gray-400 truncate">
                                   {p.projeto?.codigo} · {p.projeto?.nome || ''}
                                 </p>
-                                {p.missaoDia && p.justificativa && (
-                                  <p className="text-xs text-amber-700 mt-1 bg-white/70 rounded-lg px-2 py-1 border border-amber-100">
-                                    "{p.justificativa}"
-                                  </p>
-                                )}
                               </div>
-                              <button
-                                onClick={() => alternarMissaoDia(p)}
-                                disabled={processando === p.id}
-                                className={`p-1 flex-shrink-0 disabled:opacity-50 ${p.missaoDia ? 'text-amber-500 hover:text-amber-600' : 'text-gray-300 hover:text-amber-500'}`}
-                                title={p.missaoDia ? 'Remover missão do dia' : 'Marcar como missão do dia'}
-                              >
-                                <Star className={`w-4 h-4 ${p.missaoDia ? 'fill-amber-400' : ''}`} />
-                              </button>
                               <button
                                 onClick={() => removerDaSemana(p.id)}
                                 disabled={processando === p.id}
@@ -560,61 +475,10 @@ export default function TarefasSemanaPage() {
                           style={{ width: `${u.taxa}%` }}
                         />
                       </div>
-                      {u.missoesIndicadas > 0 && (
-                        <div className="flex items-center gap-1 text-[11px] text-amber-700 mt-1">
-                          <Target className="w-3 h-3" />
-                          Missão do dia: {u.missoesExecutadas}/{u.missoesIndicadas} executadas ({u.taxaMissao}%)
-                        </div>
-                      )}
                     </div>
                   ))}
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Justificativa da missão do dia (executou ou não executou) */}
-      {modalJustificativa && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setModalJustificativa(null)}>
-          <div className="bg-white rounded-2xl max-w-md w-full" onClick={e => e.stopPropagation()}>
-            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                  <Target className="w-4 h-4 text-amber-500" /> Missão do dia
-                </h3>
-                <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">{modalJustificativa.titulo}</p>
-              </div>
-              <button onClick={() => setModalJustificativa(null)} className="text-gray-400 hover:text-gray-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-5 space-y-3">
-              <p className="text-sm text-gray-600">
-                {modalJustificativa.concluidaAtual
-                  ? 'Você está reabrindo esta missão do dia. Descreva o motivo:'
-                  : 'Antes de marcar como concluída, descreva como foi a execução (ou o motivo, caso não tenha sido concluída):'}
-              </p>
-              <textarea
-                value={textoJustificativa}
-                onChange={e => setTextoJustificativa(e.target.value)}
-                autoFocus
-                rows={3}
-                placeholder="Justificativa..."
-                className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-              />
-              <div className="flex justify-end gap-3 pt-1">
-                <button onClick={() => setModalJustificativa(null)}
-                  className="px-4 py-2 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50">
-                  Cancelar
-                </button>
-                <button onClick={confirmarJustificativa} disabled={processando === modalJustificativa.itemId}
-                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold flex items-center gap-2">
-                  {processando === modalJustificativa.itemId && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Confirmar
-                </button>
-              </div>
             </div>
           </div>
         </div>

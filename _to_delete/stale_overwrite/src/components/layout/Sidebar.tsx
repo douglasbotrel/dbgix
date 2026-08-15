@@ -5,7 +5,7 @@ import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Settings,
-  ClipboardList, BarChart3, ChevronLeft, ChevronRight, X, ListChecks, Users2
+  ClipboardList, BarChart3, ChevronLeft, ChevronRight, X, ListChecks
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -33,12 +33,6 @@ const navItems = [
     label: 'BI / Relatórios',
     icon: BarChart3,
     modulo: 'bi',
-  },
-  {
-    href: '/gestao-pessoas',
-    label: 'Gestão de Pessoas',
-    icon: Users2,
-    modulo: 'gestao-pessoas',
   },
 ]
 

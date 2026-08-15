@@ -80,8 +80,6 @@ export async function GET(request: NextRequest) {
         itemId: p.tarefaId,
         criadoEm: p.criadoEm,
         diaSemana: p.diaSemana,
-        missaoDia: p.missaoDia,
-        justificativa: p.justificativa,
         titulo: p.tarefa?.titulo,
         projeto: p.tarefa?.projeto,
         concluida: p.tarefa?.status === 'CONCLUIDA',
@@ -123,17 +121,14 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Atualiza o dia da semana, a marcação de "missão do dia" e/ou a justificativa
-// de um item já planejado. Quem pode editar: o próprio dono do item (analista)
-// ou um gestor (PODE_VER_OUTROS) — mesma regra dos outros endpoints desta rota,
-// já que a missão do dia pode ser definida pelo gestor OU pelo analista.
+// Atualiza o dia da semana escolhido para um item já planejado
 export async function PATCH(request: NextRequest) {
   try {
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
 
     const body = await request.json()
-    const { id, diaSemana, missaoDia, justificativa } = body
+    const { id, diaSemana } = body
     if (!id) return NextResponse.json({ error: 'id é obrigatório' }, { status: 400 })
 
     const item = await prisma.tarefaSemana.findUnique({ where: { id } })
@@ -142,36 +137,9 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
     }
 
-    const data: any = {}
-    if (diaSemana !== undefined) data.diaSemana = diaSemana === null ? null : Number(diaSemana)
-
-    if (missaoDia !== undefined) {
-      const diaAlvo = diaSemana !== undefined ? (diaSemana === null ? null : Number(diaSemana)) : item.diaSemana
-      if (missaoDia && diaAlvo === null) {
-        return NextResponse.json({ error: 'Defina o dia da tarefa antes de marcar como missão do dia' }, { status: 400 })
-      }
-      data.missaoDia = Boolean(missaoDia)
-    }
-
-    if (justificativa !== undefined) data.justificativa = justificativa ? String(justificativa).trim() : null
-
-    // Só um item por usuário/dia/semana pode ser a "missão do dia" — ao marcar
-    // um novo, desmarca qualquer outro do mesmo dia nessa semana.
-    const atualizado = await prisma.$transaction(async tx => {
-      if (data.missaoDia === true) {
-        const diaAlvo = data.diaSemana !== undefined ? data.diaSemana : item.diaSemana
-        await tx.tarefaSemana.updateMany({
-          where: {
-            usuarioId: item.usuarioId,
-            semanaInicio: item.semanaInicio,
-            diaSemana: diaAlvo,
-            missaoDia: true,
-            id: { not: id },
-          },
-          data: { missaoDia: false },
-        })
-      }
-      return tx.tarefaSemana.update({ where: { id }, data })
+    const atualizado = await prisma.tarefaSemana.update({
+      where: { id },
+      data: { diaSemana: diaSemana === null ? null : Number(diaSemana) },
     })
 
     return NextResponse.json({ item: atualizado })

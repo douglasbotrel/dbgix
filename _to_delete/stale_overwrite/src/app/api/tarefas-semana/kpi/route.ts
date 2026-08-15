@@ -37,30 +37,14 @@ export async function GET(request: NextRequest) {
       },
     })
 
-    const porUsuario: Record<string, {
-      nome: string
-      planejadas: number
-      concluidas: number
-      missoesIndicadas: number
-      missoesExecutadas: number
-      missoesComJustificativa: number
-    }> = {}
+    const porUsuario: Record<string, { nome: string; planejadas: number; concluidas: number }> = {}
     for (const r of registros) {
       if (!porUsuario[r.usuarioId]) {
-        porUsuario[r.usuarioId] = {
-          nome: r.usuario.nome, planejadas: 0, concluidas: 0,
-          missoesIndicadas: 0, missoesExecutadas: 0, missoesComJustificativa: 0,
-        }
+        porUsuario[r.usuarioId] = { nome: r.usuario.nome, planejadas: 0, concluidas: 0 }
       }
-      const acc = porUsuario[r.usuarioId]
-      acc.planejadas++
+      porUsuario[r.usuarioId].planejadas++
       const concluida = r.tarefa?.status === 'CONCLUIDA'
-      if (concluida) acc.concluidas++
-      if (r.missaoDia) {
-        acc.missoesIndicadas++
-        if (concluida) acc.missoesExecutadas++
-        if (r.justificativa) acc.missoesComJustificativa++
-      }
+      if (concluida) porUsuario[r.usuarioId].concluidas++
     }
 
     const usuarios = Object.entries(porUsuario)
@@ -70,10 +54,6 @@ export async function GET(request: NextRequest) {
         planejadas: v.planejadas,
         concluidas: v.concluidas,
         taxa: v.planejadas > 0 ? Math.round((v.concluidas / v.planejadas) * 1000) / 10 : 0,
-        missoesIndicadas: v.missoesIndicadas,
-        missoesExecutadas: v.missoesExecutadas,
-        missoesComJustificativa: v.missoesComJustificativa,
-        taxaMissao: v.missoesIndicadas > 0 ? Math.round((v.missoesExecutadas / v.missoesIndicadas) * 1000) / 10 : 0,
       }))
       .sort((a, b) => b.taxa - a.taxa)
 

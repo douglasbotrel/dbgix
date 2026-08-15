@@ -219,13 +219,6 @@ model TarefaSemana {
   usuarioId    String
   semanaInicio DateTime // segunda-feira (00:00) da semana em que foi planejada
   diaSemana    Int?     // 0=Segunda .. 6=Domingo — null = "qualquer dia da semana"
-  // "Missão do dia" — item em destaque no dia, definido pelo gestor ou pelo
-  // próprio analista. Só um por usuário/dia (reforçado na rota da API).
-  // Alimenta o painel de eficiência (indicada x executada) em Gestão de Pessoas.
-  missaoDia    Boolean  @default(false)
-  // Justificativa obrigatória quando o analista marca a tarefa como executada
-  // ou não-executada NO DIA em que ela é a missão do dia — dá contexto do porquê.
-  justificativa String?
   criadoEm     DateTime @default(now())
 
   tarefa  Tarefa  @relation(fields: [tarefaId], references: [id])

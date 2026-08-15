@@ -10,7 +10,6 @@ const MODULOS = [
   { id: 'tarefas-semana', label: '🗓️ Tarefas da Semana' },
   { id: 'operacional',    label: '⚙️ Operacional' },
   { id: 'bi',             label: '📈 BI / Relatórios' },
-  { id: 'gestao-pessoas', label: '🧑‍🤝‍🧑 Gestão de Pessoas' },
   { id: 'configuracoes',  label: '🔧 Configurações' },
 ]
 
@@ -272,15 +271,13 @@ export default function ConfiguracoesPage() {
   }
 
   async function criarServico() {
-    if (!novaServNome) { toast.error('Preencha o nome'); return }
-    // Se nenhuma categoria foi digitada/selecionada, usa "Outro" como padrão
-    const categoria = novaServCateg.trim() || 'Outro'
+    if (!novaServNome || !novaServCateg) { toast.error('Preencha nome e categoria'); return }
     setSalvando(true)
     try {
       const res = await fetch('/api/pre-cadastros', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tipo: 'servico', nome: novaServNome, categoria }),
+        body: JSON.stringify({ tipo: 'servico', nome: novaServNome, categoria: novaServCateg }),
       })
       if (!res.ok) throw new Error()
       toast.success('Serviço adicionado!')
@@ -325,14 +322,13 @@ export default function ConfiguracoesPage() {
 
   async function salvarEdicaoServico() {
     if (!servicoEditando || !formServico.nome) { toast.error('Nome é obrigatório'); return }
-    const categoria = formServico.categoria.trim() || 'Outro'
     setSalvando(true)
     try {
       const res = await fetch('/api/pre-cadastros', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          tipo: 'servico', id: servicoEditando.id, nome: formServico.nome, categoria,
+          tipo: 'servico', id: servicoEditando.id, nome: formServico.nome, categoria: formServico.categoria,
         }),
       })
       if (!res.ok) { const err = await res.json(); toast.error(err.error || 'Erro ao salvar'); return }
@@ -385,13 +381,6 @@ export default function ConfiguracoesPage() {
       </div>
     )
   }
-
-  // Sugestões de categoria = categorias já usadas em outros tipos de serviço
-  // cadastrados. Se ainda não existe nenhuma, "Outro" fica como única opção.
-  const categoriasExistentes = Array.from(new Set(servicos.map(s => s.categoria).filter(Boolean))) as string[]
-  const sugestoesCategoria = categoriasExistentes.length > 0
-    ? Array.from(new Set([...categoriasExistentes, 'Outro']))
-    : ['Outro']
 
   return (
     <div className="space-y-6">
@@ -652,13 +641,12 @@ export default function ConfiguracoesPage() {
               <input type="text" value={novaServNome} onChange={e => setNovaServNome(e.target.value)}
                 placeholder="Nome do serviço" autoFocus
                 className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
-              <input type="text" value={novaServCateg} onChange={e => setNovaServCateg(e.target.value)}
-                list="sugestoes-categoria-servico"
-                placeholder="Tipo (ex: Administrativo, Contábil...)"
-                className="w-64 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white" />
-              <datalist id="sugestoes-categoria-servico">
-                {sugestoesCategoria.map(c => <option key={c} value={c} />)}
-              </datalist>
+              <select value={novaServCateg} onChange={e => setNovaServCateg(e.target.value)}
+                className="w-52 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
+                <option value="">Tipo *</option>
+                <option value="ambiental">Licenciamento Ambiental</option>
+                <option value="regularizacao">Regularização</option>
+              </select>
               <button onClick={criarServico} disabled={salvando}
                 className="px-3 py-2 bg-green-600 text-white rounded-lg">
                 {salvando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
@@ -815,12 +803,13 @@ export default function ConfiguracoesPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Tipo / Categoria</label>
-                <input type="text" value={formServico.categoria}
+                <select value={formServico.categoria}
                   onChange={e => setFormServico(p => ({ ...p, categoria: e.target.value }))}
-                  list="sugestoes-categoria-servico"
-                  placeholder="Ex: Administrativo, Contábil... (padrão: Outro)"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white" />
-                <p className="text-xs text-gray-400 mt-1">Digite um tipo novo ou escolha um já cadastrado. Em branco, fica como "Outro".</p>
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
+                  <option value="">Selecione...</option>
+                  <option value="ambiental">Licenciamento Ambiental</option>
+                  <option value="regularizacao">Regularização</option>
+                </select>
               </div>
               <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
                 <button onClick={() => setServicoEditando(null)}

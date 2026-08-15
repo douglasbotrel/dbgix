@@ -25,7 +25,6 @@ const ROTA_MODULO: { prefix: string; modulo: string }[] = [
   { prefix: '/tarefas-semana', modulo: 'tarefas-semana' },
   { prefix: '/operacional', modulo: 'operacional' },
   { prefix: '/bi', modulo: 'bi' },
-  { prefix: '/gestao-pessoas', modulo: 'gestao-pessoas' },
   { prefix: '/configuracoes', modulo: 'configuracoes' },
 ]
 

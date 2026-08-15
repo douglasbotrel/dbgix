@@ -117,10 +117,10 @@ export const ETAPA_LABELS: Record<string, string> = {
 export const MODULOS_POR_ROLE: Record<string, string[] | null> = {
   ADMIN:                  null,
   GESTOR_GERAL:           null,
-  GESTOR_ADMINISTRATIVO:  ['dashboard', 'tarefas-semana', 'operacional', 'bi', 'gestao-pessoas', 'configuracoes'],
-  GESTOR_OPERACIONAL:     ['dashboard', 'tarefas-semana', 'operacional', 'bi', 'gestao-pessoas'],
+  GESTOR_ADMINISTRATIVO:  ['dashboard', 'tarefas-semana', 'operacional', 'bi', 'configuracoes'],
+  GESTOR_OPERACIONAL:     ['dashboard', 'tarefas-semana', 'operacional', 'bi'],
   GESTOR_CAMPO:           ['dashboard', 'tarefas-semana', 'operacional'],
-  SUPERVISOR:             ['dashboard', 'tarefas-semana', 'operacional', 'gestao-pessoas'],
+  SUPERVISOR:             ['dashboard', 'tarefas-semana', 'operacional'],
   ANALISTA:               ['dashboard', 'tarefas-semana', 'operacional'],
   ANALISTA_RAPIDO:        ['dashboard', 'tarefas-semana', 'operacional'],
   TECNICO_CAMPO:          ['dashboard', 'tarefas-semana', 'operacional'],
