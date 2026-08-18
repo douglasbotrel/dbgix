@@ -65,9 +65,12 @@ export default function TarefasSemanaPage() {
   const [carregandoKpi, setCarregandoKpi] = useState(false)
   const [colapsados, setColapsados] = useState<Record<string, boolean>>({})
 
-  // Justificativa obrigatória ao executar/não executar a "missão do dia"
+  // Justificativa obrigatória ao executar/não executar OU ao remarcar de dia
+  // a "missão do dia" — fica registrada para a análise de performance.
   const [modalJustificativa, setModalJustificativa] = useState<{
+    modo: 'concluir' | 'remarcar'
     itemId: string; tarefaId: string; concluidaAtual: boolean; titulo: string
+    diaNovo?: number | null
   } | null>(null)
   const [textoJustificativa, setTextoJustificativa] = useState('')
 
@@ -153,6 +156,21 @@ export default function TarefasSemanaPage() {
     }
   }
 
+  // Clique numa pílula de dia: item comum remarca direto. Se já for a
+  // "missão do dia", não pode remarcar direto — pede justificativa antes
+  // (fica registrada para a análise de performance).
+  function clicarDia(p: any, diaClicado: number) {
+    if (!p.missaoDia) {
+      alterarDia(p.id, p.diaSemana, diaClicado)
+      return
+    }
+    const novoDia = p.diaSemana === diaClicado ? null : diaClicado
+    setTextoJustificativa('')
+    setModalJustificativa({
+      modo: 'remarcar', itemId: p.id, tarefaId: p.itemId, concluidaAtual: p.concluida, titulo: p.titulo, diaNovo: novoDia,
+    })
+  }
+
   async function marcarConcluida(itemId: string, concluida: boolean) {
     setProcessando(itemId)
     try {
@@ -174,7 +192,7 @@ export default function TarefasSemanaPage() {
   function clicarConcluir(p: any) {
     if (p.missaoDia) {
       setTextoJustificativa(p.justificativa || '')
-      setModalJustificativa({ itemId: p.id, tarefaId: p.itemId, concluidaAtual: p.concluida, titulo: p.titulo })
+      setModalJustificativa({ modo: 'concluir', itemId: p.id, tarefaId: p.itemId, concluidaAtual: p.concluida, titulo: p.titulo })
       return
     }
     marcarConcluida(p.itemId, p.concluida)
@@ -185,6 +203,24 @@ export default function TarefasSemanaPage() {
     if (!textoJustificativa.trim()) { toast.error('Descreva o motivo antes de confirmar'); return }
     setProcessando(modalJustificativa.itemId)
     try {
+      if (modalJustificativa.modo === 'remarcar') {
+        const res = await fetch('/api/tarefas-semana', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: modalJustificativa.itemId,
+            diaSemana: modalJustificativa.diaNovo,
+            justificativa: textoJustificativa.trim(),
+          }),
+        })
+        if (!res.ok) { const err = await res.json(); toast.error(err.error || 'Erro ao remarcar'); return }
+        toast.success('Missão do dia remarcada!')
+        setModalJustificativa(null)
+        setTextoJustificativa('')
+        carregar()
+        return
+      }
+
       await fetch('/api/tarefas-semana', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -505,9 +541,9 @@ export default function TarefasSemanaPage() {
                               {DIAS_LETRA.map((letra, i) => (
                                 <button
                                   key={i}
-                                  onClick={() => alterarDia(p.id, p.diaSemana, i)}
+                                  onClick={() => clicarDia(p, i)}
                                   disabled={processando === p.id}
-                                  title={DIAS_NOME[i]}
+                                  title={p.missaoDia ? `${DIAS_NOME[i]} (remarcar exige justificativa)` : DIAS_NOME[i]}
                                   className={`w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center transition-colors disabled:opacity-50 ${
                                     p.diaSemana === i
                                       ? `${DIAS_COR[i]} text-white`
@@ -586,7 +622,8 @@ export default function TarefasSemanaPage() {
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
               <div>
                 <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                  <Target className="w-4 h-4 text-amber-500" /> Missão do dia
+                  <Target className="w-4 h-4 text-amber-500" />
+                  {modalJustificativa.modo === 'remarcar' ? 'Remarcar missão do dia' : 'Missão do dia'}
                 </h3>
                 <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">{modalJustificativa.titulo}</p>
               </div>
@@ -596,9 +633,11 @@ export default function TarefasSemanaPage() {
             </div>
             <div className="p-5 space-y-3">
               <p className="text-sm text-gray-600">
-                {modalJustificativa.concluidaAtual
-                  ? 'Você está reabrindo esta missão do dia. Descreva o motivo:'
-                  : 'Antes de marcar como concluída, descreva como foi a execução (ou o motivo, caso não tenha sido concluída):'}
+                {modalJustificativa.modo === 'remarcar'
+                  ? 'A missão do dia não pode ser simplesmente remarcada — descreva o motivo da mudança de dia (fica registrado para a análise de performance):'
+                  : modalJustificativa.concluidaAtual
+                    ? 'Você está reabrindo esta missão do dia. Descreva o motivo:'
+                    : 'Antes de marcar como concluída, descreva como foi a execução (ou o motivo, caso não tenha sido concluída):'}
               </p>
               <textarea
                 value={textoJustificativa}

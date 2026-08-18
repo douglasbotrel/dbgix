@@ -74,7 +74,7 @@ export default function ConfiguracoesPage() {
 
   // Tarefas padrão por serviço
   const [servicoExpandido, setServicoExpandido] = useState<string | null>(null)
-  const [tarefasEdicao, setTarefasEdicao] = useState<{ titulo: string; etapa: string; ordem: number }[]>([])
+  const [tarefasEdicao, setTarefasEdicao] = useState<{ titulo: string; ordem: number }[]>([])
   const [salvandoTarefas, setSalvandoTarefas] = useState(false)
 
   // Edição de serviço
@@ -307,7 +307,7 @@ export default function ConfiguracoesPage() {
   }
 
   function addTarefa() {
-    setTarefasEdicao(p => [...p, { titulo: '', etapa: '', ordem: p.length + 1 }])
+    setTarefasEdicao(p => [...p, { titulo: '', ordem: p.length + 1 }])
   }
 
   function removeTarefa(i: number) {
@@ -772,10 +772,6 @@ export default function ConfiguracoesPage() {
                               onChange={e => updateTarefa(i, 'titulo', e.target.value)}
                               placeholder="Descrição da tarefa"
                               className="flex-1 px-2 py-1 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                            <input type="text" value={t.etapa}
-                              onChange={e => updateTarefa(i, 'etapa', e.target.value)}
-                              placeholder="Etapa (ex: VISTORIA)"
-                              className="w-40 px-2 py-1 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
                             <button onClick={() => removeTarefa(i)}
                               className="text-red-400 hover:text-red-600 p-1 rounded transition-colors flex-shrink-0">
                               <Trash2 className="w-3.5 h-3.5" />

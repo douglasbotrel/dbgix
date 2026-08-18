@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
@@ -35,7 +35,7 @@ export default function ProjetoDetalhe() {
   const [salvandoId, setSalvandoId] = useState<string | null>(null)
   // Nova tarefa avulsa
   const [novaT, setNovaT]           = useState(false)
-  const [formTarefa, setFormTarefa] = useState({ titulo: '', etapa: '', prazo: '', responsavelId: '', observacao: '' })
+  const [formTarefa, setFormTarefa] = useState({ titulo: '', prazo: '', responsavelId: '', observacao: '' })
   const [salvandoT, setSalvandoT]   = useState(false)
 
   // Usuário logado (para controle de permissões)
@@ -262,7 +262,7 @@ export default function ProjetoDetalhe() {
     finally { setSalvandoCred(false) }
   }
 
-  // ── Salvar dados do Protocolo e mover projeto para Acompanhamento ──
+  // ── Salvar dados do Protocolo (data + código do processo no órgão) ──
   async function salvarProtocolo() {
     if (!protocoloForm.data || !protocoloForm.codigoOrgao.trim()) {
       toast.error('Informe a data e o código do processo no órgão')
@@ -296,7 +296,6 @@ export default function ProjetoDetalhe() {
         body: JSON.stringify({
           projetoId: id,
           titulo: formTarefa.titulo.trim(),
-          etapa: formTarefa.etapa || null,
           prazo: formTarefa.prazo || null,
           responsavelId: formTarefa.responsavelId || null,
           observacao: formTarefa.observacao || null,
@@ -307,7 +306,7 @@ export default function ProjetoDetalhe() {
       if (!res.ok) { toast.error(data.error || 'Erro ao criar tarefa'); return }
       toast.success('Tarefa criada')
       setNovaT(false)
-      setFormTarefa({ titulo: '', etapa: '', prazo: '', responsavelId: '', observacao: '' })
+      setFormTarefa({ titulo: '', prazo: '', responsavelId: '', observacao: '' })
       loadProjeto({ silent: true })
     } catch { toast.error('Erro ao criar tarefa') }
     finally { setSalvandoT(false) }
@@ -328,19 +327,6 @@ export default function ProjetoDetalhe() {
     } catch { toast.error('Erro') }
     finally { setIniciandoExecucao(false) }
   }
-
-  // ── Agrupa tarefas pela etapa informada em cada uma ───────────
-  // DEVE ficar antes de qualquer early-return para não violar as Rules of Hooks
-  const gruposTarefas = useMemo(() => {
-    const lista: any[] = projeto?.tarefas || []
-    const grupos: Record<string, { servico: string; tarefas: any[] }> = {}
-    lista.forEach((t: any) => {
-      const servico = (t.etapa && t.etapa.trim()) || 'Geral'
-      if (!grupos[servico]) grupos[servico] = { servico, tarefas: [] }
-      grupos[servico].tarefas.push({ ...t, _tituloLimpo: t.titulo })
-    })
-    return Object.values(grupos)
-  }, [projeto?.tarefas])
 
   if (loading) {
     return (
@@ -364,14 +350,6 @@ export default function ProjetoDetalhe() {
     if (u.cargo) partes.push(u.cargo)
     return partes.join(' — ')
   }
-
-  const tarefasPorEtapa = tarefas.reduce((acc: any, t: any) => {
-    const etapa = t.etapa || 'GERAL'
-    if (!acc[etapa]) acc[etapa] = []
-    acc[etapa].push(t)
-    return acc
-  }, {})
-  const etapas = Object.keys(tarefasPorEtapa)
 
   // Porcentagem de tarefas com prazo/responsável definidos (para o banner)
   const comAtribuicao = tarefas.filter((t: any) => t.prazo && t.responsavelId).length
@@ -624,30 +602,8 @@ export default function ProjetoDetalhe() {
             </div>
           ) : (
             <div>
-              {/* Agrupado por etapa/serviço */}
-              {etapas.map(etapa => {
-                const tarefasEtapa = filtroPendentes
-                  ? tarefasPorEtapa[etapa].filter((t: any) => !t.responsavelId || !t.prazo)
-                  : tarefasPorEtapa[etapa]
-                if (tarefasEtapa.length === 0) return null
-
-                const atribuidasNaEtapa = tarefasPorEtapa[etapa].filter((t: any) => t.prazo && t.responsavelId).length
-                const totalNaEtapa      = tarefasPorEtapa[etapa].length
-
-                return (
-                  <div key={etapa}>
-                    {/* Cabeçalho do grupo */}
-                    <div className="flex items-center justify-between px-4 sm:px-6 py-2 bg-gray-50 border-b border-gray-100">
-                      <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">{etapa}</span>
-                      <span className={`text-xs font-medium ${
-                        atribuidasNaEtapa === totalNaEtapa ? 'text-green-600' : 'text-amber-500'
-                      }`}>
-                        {atribuidasNaEtapa}/{totalNaEtapa}
-                      </span>
-                    </div>
-
-                    {/* Linhas de tarefa — compactas por padrão */}
-                    {tarefasEtapa.map((tarefa: any) => {
+              {/* Linhas de tarefa — compactas por padrão */}
+              {tarefasFiltradas.map((tarefa: any) => {
                       const edit           = editando[tarefa.id] || { prazo: '', responsavelId: '' }
                       const isOpen         = !!expandido[tarefa.id]
                       const isSaving       = salvandoId === tarefa.id
@@ -819,9 +775,6 @@ export default function ProjetoDetalhe() {
                           )}
                         </div>
                       )
-                    })}
-                  </div>
-                )
               })}
             </div>
           )}
@@ -887,14 +840,7 @@ export default function ProjetoDetalhe() {
               className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
               autoFocus
             />
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <input
-                type="text"
-                value={formTarefa.etapa}
-                onChange={e => setFormTarefa(p => ({ ...p, etapa: e.target.value }))}
-                placeholder="Etapa / grupo"
-                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <input
                 type="date"
                 value={formTarefa.prazo}
@@ -926,7 +872,7 @@ export default function ProjetoDetalhe() {
                 className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors">
                 {salvandoT && <Loader2 className="w-3 h-3 animate-spin" />} Salvar
               </button>
-              <button onClick={() => { setNovaT(false); setFormTarefa({ titulo: '', etapa: '', prazo: '', responsavelId: '', observacao: '' }) }}
+              <button onClick={() => { setNovaT(false); setFormTarefa({ titulo: '', prazo: '', responsavelId: '', observacao: '' }) }}
                 className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
                 Cancelar
               </button>
@@ -950,54 +896,20 @@ export default function ProjetoDetalhe() {
             )}
           </div>
 
-          {/* Progresso por etapa — scroll horizontal no mobile */}
-          {etapas.length > 0 && (
-            <div className="overflow-x-auto mb-5">
-              <div className="flex items-center gap-1 pb-1 min-w-max">
-                {etapas.map((etapa, idx) => {
-                  const ts     = tarefasPorEtapa[etapa] || []
-                  const concl  = ts.filter((t: any) => t.status === 'CONCLUIDA').length
-                  const pct    = ts.length > 0 ? Math.round((concl / ts.length) * 100) : 0
-                  const isDone = pct === 100
-                  return (
-                    <div key={etapa} className="flex items-center gap-1 flex-shrink-0">
-                      <div className={`flex flex-col items-center p-2 rounded-lg w-20 text-center ${isDone ? 'bg-green-50' : 'bg-gray-50'}`}>
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold mb-1 ${
-                          isDone ? 'bg-green-600 text-white' : pct > 0 ? 'bg-yellow-400 text-white' : 'bg-gray-200 text-gray-600'
-                        }`}>
-                          {isDone ? <Check className="w-3.5 h-3.5" /> : idx + 1}
-                        </div>
-                        <span className={`text-xs font-medium truncate w-full ${isDone ? 'text-green-700' : 'text-gray-600'}`}>{etapa}</span>
-                        <span className="text-xs text-gray-400">{pct}%</span>
-                      </div>
-                      {idx < etapas.length - 1 && (
-                        <div className={`h-0.5 w-4 ${isDone ? 'bg-green-400' : 'bg-gray-200'}`} />
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Tarefas por etapa */}
-          <div className="space-y-5">
-            {etapas.length === 0 ? (
+          {/* Tarefas do projeto */}
+          <div className="space-y-2">
+            {tarefas.length === 0 ? (
               <div className="text-center py-10 text-gray-400">
                 <Clock className="w-10 h-10 mx-auto mb-2 opacity-30" />
                 <p className="text-sm">
                   {emOperacional
-                    ? 'Tarefas serão exibidas aqui após serem geradas pelo financeiro.'
+                    ? 'Adicione as tarefas deste projeto manualmente usando o botão acima.'
                     : 'Nenhuma tarefa cadastrada.'
                   }
                 </p>
               </div>
             ) : (
-              etapas.map(etapa => (
-                <div key={etapa}>
-                  <h4 className="text-xs font-bold text-gray-400 mb-2 uppercase tracking-wider">{etapa}</h4>
-                  <div className="space-y-2">
-                    {tarefasPorEtapa[etapa].map((tarefa: any) => (
+              tarefas.map((tarefa: any) => (
                       <div
                         key={tarefa.id}
                         className={`flex items-start gap-3 p-3 rounded-xl border transition-colors ${
@@ -1037,9 +949,6 @@ export default function ProjetoDetalhe() {
                           {STATUS_TAREFA_LABELS[tarefa.status]}
                         </span>
                       </div>
-                    ))}
-                  </div>
-                </div>
               ))
             )}
           </div>
@@ -1047,15 +956,22 @@ export default function ProjetoDetalhe() {
         </div>
       )}
 
-      {/* ── Tarefas agrupadas por serviço ──────────────────────  */}
-      {aba === 'tarefas' && (
+      {/* ── Tarefas do projeto ──────────────────────────────  */}
+      {aba === 'tarefas' && (() => {
+        const pendentes   = tarefas.filter((t: any) => t.status !== 'CONCLUIDA')
+        const concluidas  = tarefas.filter((t: any) => t.status === 'CONCLUIDA')
+        const pct         = tarefas.length > 0 ? Math.round((concluidas.length / tarefas.length) * 100) : 0
+        const verConcl    = !!expandido['concl_projeto']
+        const toggleConcl = () => setExpandido(prev => ({ ...prev, concl_projeto: !prev.concl_projeto }))
+
+        return (
         <div className="space-y-4">
           {/* Header */}
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="font-semibold text-gray-900">Tarefas por Serviço</h3>
+              <h3 className="font-semibold text-gray-900">Tarefas do Projeto</h3>
               <p className="text-xs text-gray-400 mt-0.5">
-                {tarefas.filter((t: any) => t.status === 'CONCLUIDA').length}/{tarefas.length} concluídas
+                {concluidas.length}/{tarefas.length} concluídas
               </p>
             </div>
             {modoGestor && (
@@ -1082,112 +998,100 @@ export default function ProjetoDetalhe() {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {gruposTarefas.map(({ servico, tarefas: tGrupo }) => {
-                const pendentes  = tGrupo.filter((t: any) => t.status !== 'CONCLUIDA')
-                const concluidas = tGrupo.filter((t: any) => t.status === 'CONCLUIDA')
-                const pct        = tGrupo.length > 0 ? Math.round((concluidas.length / tGrupo.length) * 100) : 0
-                const verConcl   = !!expandido[`concl_${servico}`]
-                const toggleConcl = () => setExpandido(prev => ({ ...prev, [`concl_${servico}`]: !prev[`concl_${servico}`] }))
+            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
 
-                return (
-                  <div key={servico} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+              {/* Progresso geral */}
+              <div className="px-4 py-3 border-b border-gray-50 bg-gray-50">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className={`text-xs font-bold ${pct === 100 ? 'text-green-600' : 'text-gray-400'}`}>
+                    {pct}% concluído
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className={`h-1.5 rounded-full transition-all duration-500 ${pct === 100 ? 'bg-green-500' : 'bg-green-400'}`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">
+                  {pendentes.length > 0 ? `${pendentes.length} pendente(s)` : '✅ Tudo concluído'}
+                  {concluidas.length > 0 && ` · ${concluidas.length} concluída(s)`}
+                </p>
+              </div>
 
-                    {/* Cabeçalho do grupo */}
-                    <div className="px-4 py-3 border-b border-gray-50 bg-gray-50">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <h4 className="font-semibold text-gray-800 text-sm leading-snug">{servico}</h4>
-                        <span className={`text-xs font-bold ${pct === 100 ? 'text-green-600' : 'text-gray-400'}`}>
-                          {pct}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
-                        <div
-                          className={`h-1.5 rounded-full transition-all duration-500 ${pct === 100 ? 'bg-green-500' : 'bg-green-400'}`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                      <p className="text-xs text-gray-400 mt-1">
-                        {pendentes.length > 0 ? `${pendentes.length} pendente(s)` : '✅ Tudo concluído'}
-                        {concluidas.length > 0 && ` · ${concluidas.length} concluída(s)`}
+              {/* Tarefas PENDENTES */}
+              <div className="divide-y divide-gray-50">
+                {pendentes.length === 0 && !verConcl && (
+                  <div className="px-4 py-4 text-center text-xs text-gray-400">
+                    Todas as atividades concluídas ✅
+                  </div>
+                )}
+                {pendentes.map((tarefa: any) => (
+                  <div key={tarefa.id} className="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition-colors">
+                    <button
+                      onClick={() => toggleTarefa(tarefa.id, tarefa.status)}
+                      className="w-5 h-5 rounded-full border-2 border-gray-300 hover:border-green-500 flex items-center justify-center flex-shrink-0 mt-0.5 transition-colors"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-900 font-medium leading-snug">
+                        {tarefa.titulo}
                       </p>
+                      <div className="flex gap-2 text-xs text-gray-400 mt-0.5 flex-wrap">
+                        {tarefa.responsavel && <span>👤 {tarefa.responsavel.nome}</span>}
+                        {tarefa.prazo && <span>📅 {formatDate(tarefa.prazo)}</span>}
+                        {!tarefa.responsavel && <span className="text-amber-400">Sem responsável</span>}
+                      </div>
+                      <NoteEditor tarefaId={tarefa.id} currentNote={tarefa.observacao ?? null} onSaved={() => loadProjeto({ silent: true })} />
                     </div>
+                  </div>
+                ))}
+              </div>
 
-                    {/* Tarefas PENDENTES */}
-                    <div className="divide-y divide-gray-50">
-                      {pendentes.length === 0 && !verConcl && (
-                        <div className="px-4 py-4 text-center text-xs text-gray-400">
-                          Todas as atividades concluídas ✅
-                        </div>
-                      )}
-                      {pendentes.map((tarefa: any) => (
-                        <div key={tarefa.id} className="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition-colors">
+              {/* Toggle de concluídas */}
+              {concluidas.length > 0 && (
+                <div className="border-t border-gray-50">
+                  <button
+                    onClick={toggleConcl}
+                    className="w-full flex items-center justify-between px-4 py-2.5 text-xs text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Check className="w-3.5 h-3.5 text-green-500" />
+                      {concluidas.length} concluída(s) — {verConcl ? 'ocultar' : 'ver'}
+                    </span>
+                    <span className="text-lg leading-none">{verConcl ? '∧' : '∨'}</span>
+                  </button>
+
+                  {verConcl && (
+                    <div className="divide-y divide-gray-50 bg-green-50/30">
+                      {concluidas.map((tarefa: any) => (
+                        <div key={tarefa.id} className="flex items-start gap-3 px-4 py-2.5 hover:bg-green-50/50 transition-colors">
                           <button
                             onClick={() => toggleTarefa(tarefa.id, tarefa.status)}
-                            className="w-5 h-5 rounded-full border-2 border-gray-300 hover:border-green-500 flex items-center justify-center flex-shrink-0 mt-0.5 transition-colors"
-                          />
+                            className="w-5 h-5 rounded-full bg-green-600 border-2 border-green-600 flex items-center justify-center flex-shrink-0 mt-0.5"
+                          >
+                            <Check className="w-3 h-3 text-white" />
+                          </button>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm text-gray-900 font-medium leading-snug">
-                              {tarefa._tituloLimpo}
+                            <p className="text-sm text-gray-400 line-through leading-snug">
+                              {tarefa.titulo}
                             </p>
                             <div className="flex gap-2 text-xs text-gray-400 mt-0.5 flex-wrap">
-                              {tarefa.responsavel && <span>👤 {tarefa.responsavel.nome}</span>}
-                              {tarefa.prazo && <span>📅 {formatDate(tarefa.prazo)}</span>}
-                              {!tarefa.responsavel && <span className="text-amber-400">Sem responsável</span>}
+                              {tarefa.responsavel && <span>{tarefa.responsavel.nome}</span>}
+                              {tarefa.prazo && <span>{formatDate(tarefa.prazo)}</span>}
                             </div>
                             <NoteEditor tarefaId={tarefa.id} currentNote={tarefa.observacao ?? null} onSaved={() => loadProjeto({ silent: true })} />
                           </div>
                         </div>
                       ))}
                     </div>
-
-                    {/* Toggle de concluídas */}
-                    {concluidas.length > 0 && (
-                      <div className="border-t border-gray-50">
-                        <button
-                          onClick={toggleConcl}
-                          className="w-full flex items-center justify-between px-4 py-2.5 text-xs text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
-                        >
-                          <span className="flex items-center gap-1.5">
-                            <Check className="w-3.5 h-3.5 text-green-500" />
-                            {concluidas.length} concluída(s) — {verConcl ? 'ocultar' : 'ver'}
-                          </span>
-                          <span className="text-lg leading-none">{verConcl ? '∧' : '∨'}</span>
-                        </button>
-
-                        {verConcl && (
-                          <div className="divide-y divide-gray-50 bg-green-50/30">
-                            {concluidas.map((tarefa: any) => (
-                              <div key={tarefa.id} className="flex items-start gap-3 px-4 py-2.5 hover:bg-green-50/50 transition-colors">
-                                <button
-                                  onClick={() => toggleTarefa(tarefa.id, tarefa.status)}
-                                  className="w-5 h-5 rounded-full bg-green-600 border-2 border-green-600 flex items-center justify-center flex-shrink-0 mt-0.5"
-                                >
-                                  <Check className="w-3 h-3 text-white" />
-                                </button>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm text-gray-400 line-through leading-snug">
-                                    {tarefa._tituloLimpo}
-                                  </p>
-                                  <div className="flex gap-2 text-xs text-gray-400 mt-0.5 flex-wrap">
-                                    {tarefa.responsavel && <span>{tarefa.responsavel.nome}</span>}
-                                    {tarefa.prazo && <span>{formatDate(tarefa.prazo)}</span>}
-                                  </div>
-                                  <NoteEditor tarefaId={tarefa.id} currentNote={tarefa.observacao ?? null} onSaved={() => loadProjeto({ silent: true })} />
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
-      )}
+        )
+      })()}
 
       {/* ── Documentos ────────────────────────────────────── */}
       {aba === 'documentos' && (
@@ -1418,7 +1322,7 @@ export default function ProjetoDetalhe() {
                 />
               </div>
               <p className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2">
-                ✅ Após salvar, este projeto passará a aparecer em <strong>Acompanhamento de Processos</strong>.
+                ✅ Após salvar, a data e o código do protocolo ficam registrados neste projeto.
               </p>
             </div>
 
@@ -1430,7 +1334,7 @@ export default function ProjetoDetalhe() {
                 className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold transition-colors"
               >
                 {salvandoProtocolo ? <Loader2 className="w-4 h-4 animate-spin" /> : '💾'}
-                Salvar e Acompanhar
+                Salvar Protocolo
               </button>
               <button
                 onClick={() => setModalProtocolo(false)}

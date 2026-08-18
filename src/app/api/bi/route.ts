@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getCurrentUserFull, podeAcessarModulo } from '@/lib/auth'
 
-// API de BI simplificada — dbgix não possui mais Comercial/Contratos/Financeiro/
-// Acompanhamento de Processos, então os indicadores aqui são só sobre a operação
-// (projetos, tarefas por etapa e tempos médios do fluxo operacional).
+// API de BI simplificada — dbgix não possui mais Comercial/Contratos/Financeiro,
+// então os indicadores aqui são só sobre a operação (projetos e tempos médios
+// do fluxo operacional).
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUserFull()
@@ -14,15 +14,6 @@ export async function GET(request: NextRequest) {
     }
 
     const hoje = new Date()
-
-    // ── Distribuição de tarefas por etapa ────────────────────────────────────
-    const porEtapaTarefa = await prisma.tarefa.groupBy({
-      by: ['etapa'],
-      _count: true,
-    })
-    const tarefasPorEtapa = porEtapaTarefa
-      .map(e => ({ nome: e.etapa || 'Sem etapa', qtd: e._count }))
-      .sort((a, b) => b.qtd - a.qtd)
 
     // ── Distribuição por status operacional ─────────────────────────────────
     const porStatusOperacional = await prisma.projeto.groupBy({
@@ -68,7 +59,6 @@ export async function GET(request: NextRequest) {
     )
 
     return NextResponse.json({
-      tarefasPorEtapa,
       porStatusOperacional: porStatusOperacional.map(s => ({ status: s.statusOperacional, count: s._count })),
       tempos: {
         protocoloDias:    tempoMedioProtocoloDias,

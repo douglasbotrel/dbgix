@@ -15,9 +15,13 @@ function segundaFeiraDaSemana(data: Date): Date {
 }
 
 // 0=Segunda .. 6=Domingo — mesmo índice usado em diaSemana/DIAS_NOME no front-end
-function diaDeHojeIndex(): number {
-  const dia = new Date().getDay()
+function diaIndexDeData(data: Date): number {
+  const dia = data.getDay()
   return dia === 0 ? 6 : dia - 1
+}
+
+function diaDeHojeIndex(): number {
+  return diaIndexDeData(new Date())
 }
 
 export async function GET(request: NextRequest) {
@@ -35,17 +39,21 @@ export async function GET(request: NextRequest) {
     }
 
     const semanaInicio = segundaFeiraDaSemana(semanaParam ? new Date(semanaParam) : new Date())
+    const semanaFimExclusiva = new Date(semanaInicio)
+    semanaFimExclusiva.setDate(semanaFimExclusiva.getDate() + 7)
 
-    const [planejadas, tarefasBruto] = await Promise.all([
+    const includePlanejadas = {
+      tarefa: {
+        include: {
+          projeto: { select: { id: true, codigo: true, nome: true } },
+        },
+      },
+    }
+
+    let [planejadas, tarefasBruto] = await Promise.all([
       prisma.tarefaSemana.findMany({
         where: { usuarioId, semanaInicio },
-        include: {
-          tarefa: {
-            include: {
-              projeto: { select: { id: true, codigo: true, nome: true } },
-            },
-          },
-        },
+        include: includePlanejadas,
         orderBy: { criadoEm: 'asc' },
       }),
       // Backlog — tarefas operacionais pendentes
@@ -57,6 +65,37 @@ export async function GET(request: NextRequest) {
         orderBy: [{ prazo: 'asc' }, { criadoEm: 'asc' }],
       }),
     ])
+
+    // ── Auto-planejamento ────────────────────────────────────────────────
+    // Tarefa com prazo definido dentro da semana visualizada entra
+    // automaticamente no planejamento, já no dia da semana certo — não
+    // precisa mais adicionar manualmente. Cobre tanto tarefas novas quanto
+    // prazos que já estavam definidos antes dessa sincronização existir
+    // (ela roda de novo a cada carregamento da tela, então tarefas antigas
+    // também aparecem). O dia continua podendo ser remarcado normalmente
+    // depois — isso só faz a entrada inicial automática.
+    const idsJaPlanejados = new Set(planejadas.map(p => p.tarefaId))
+    const paraAutoPlanejar = tarefasBruto.filter(t =>
+      t.prazo &&
+      new Date(t.prazo) >= semanaInicio &&
+      new Date(t.prazo) < semanaFimExclusiva &&
+      !idsJaPlanejados.has(t.id)
+    )
+
+    if (paraAutoPlanejar.length > 0) {
+      await Promise.all(paraAutoPlanejar.map(t =>
+        prisma.tarefaSemana.upsert({
+          where: { tarefaId_usuarioId_semanaInicio: { tarefaId: t.id, usuarioId, semanaInicio } },
+          create: { tarefaId: t.id, usuarioId, semanaInicio, diaSemana: diaIndexDeData(new Date(t.prazo!)) },
+          update: {},
+        })
+      ))
+      planejadas = await prisma.tarefaSemana.findMany({
+        where: { usuarioId, semanaInicio },
+        include: includePlanejadas,
+        orderBy: { criadoEm: 'asc' },
+      })
+    }
 
     const idsTarefaNaSemana = new Set(planejadas.filter(p => p.tarefaId).map(p => p.tarefaId))
 
@@ -142,6 +181,10 @@ export async function POST(request: NextRequest) {
 //   subordinado a qualquer momento. O próprio analista só pode definir a sua
 //   caso ainda não exista nenhuma registrada para hoje — não pode sobrescrever
 //   uma que o gestor (ou ele mesmo antes) já tenha definido.
+// - Diferente das tarefas comuns (que podem ser remarcadas de dia livremente),
+//   um item que JÁ é missão do dia não pode simplesmente ser remarcado — exige
+//   justificativa, que fica registrada para a análise de performance em
+//   Gestão de Pessoas.
 export async function PATCH(request: NextRequest) {
   try {
     const user = await getCurrentUser()
@@ -159,6 +202,23 @@ export async function PATCH(request: NextRequest) {
 
     const data: any = {}
     if (diaSemana !== undefined) data.diaSemana = diaSemana === null ? null : Number(diaSemana)
+
+    // Remarcar (mudar de dia) um item que já é a missão do dia exige
+    // justificativa — não entra pelo fluxo normal de "marcar/desmarcar
+    // missão" (missaoDia true/false), que já tem suas próprias regras acima.
+    if (
+      item.missaoDia &&
+      missaoDia === undefined &&
+      diaSemana !== undefined &&
+      data.diaSemana !== item.diaSemana
+    ) {
+      if (!justificativa || !String(justificativa).trim()) {
+        return NextResponse.json(
+          { error: 'A missão do dia não pode ser remarcada sem justificativa — ela é registrada para a análise de performance.' },
+          { status: 400 }
+        )
+      }
+    }
 
     if (missaoDia === true) {
       const semanaAtual = segundaFeiraDaSemana(new Date())

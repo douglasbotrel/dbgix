@@ -65,7 +65,6 @@ export default function BIPage() {
       color: CORES[i % CORES.length],
     }))
 
-  const tarefasPorEtapa       = dadosBi?.tarefasPorEtapa       ?? []
   const porStatusOperacional  = dadosBi?.porStatusOperacional  ?? []
   const tempos                = dadosBi?.tempos                ?? {}
 
@@ -238,35 +237,6 @@ export default function BIPage() {
           )}
         </div>
 
-        {/* Tarefas por etapa */}
-        <div className="bg-white rounded-2xl border border-gray-100 p-6">
-          <h3 className="font-semibold text-gray-900 mb-1">Tarefas por Etapa</h3>
-          <p className="text-xs text-gray-400 mb-4">Distribuição das tarefas cadastradas, por etapa informada</p>
-          {tarefasPorEtapa.length === 0 ? (
-            <div className="flex items-center justify-center h-40 text-gray-400 text-sm">Sem dados</div>
-          ) : (
-            <div className="space-y-3">
-              {tarefasPorEtapa.map((item: any, i: number) => {
-                const max = tarefasPorEtapa[0]?.qtd ?? 1
-                const pct = (item.qtd / max) * 100
-                return (
-                  <div key={i}>
-                    <div className="flex justify-between items-center text-sm mb-1">
-                      <span className="text-gray-700 font-medium">{item.nome}</span>
-                      <span className="font-bold text-gray-900">{item.qtd} tarefa(s)</span>
-                    </div>
-                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-700"
-                        style={{ width: `${pct}%`, backgroundColor: CORES[i % CORES.length] }}
-                      />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Indicadores operacionais */}
