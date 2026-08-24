@@ -24,6 +24,17 @@ function diaDeHojeIndex(): number {
   return diaIndexDeData(new Date())
 }
 
+// Inverso de diaIndexDeData: a data exata de um dia dentro de uma semana.
+// Usado para manter Tarefa.prazo sempre sincronizado com o dia escolhido no
+// planejamento semanal — uma atividade só tem UMA data (o prazo da tarefa);
+// diaSemana/semanaInicio são só a forma de exibir essa mesma data agrupada
+// por semana, nunca uma segunda data independente.
+function dataDoDia(semanaInicio: Date, diaSemana: number): Date {
+  const d = new Date(semanaInicio)
+  d.setDate(d.getDate() + diaSemana)
+  return d
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser()
@@ -97,6 +108,29 @@ export async function GET(request: NextRequest) {
       })
     }
 
+    // ── Consistência: uma atividade só tem UMA data ──────────────────────
+    // Se o prazo da tarefa foi alterado depois (lá no Operacional) e não cai
+    // mais dentro desta semana, o item planejado aqui ficou "órfão" — mostra
+    // um dia que não bate mais com o prazo real. Remove esses itens da
+    // semana atual/futura (a auto-planejamento acima já recria certinho na
+    // semana correta quando ela for aberta). Semanas passadas não são
+    // mexidas — ficam como registro histórico do que foi planejado/cumprido
+    // para a análise de performance.
+    const semanaAtualInicio = segundaFeiraDaSemana(new Date())
+    if (semanaInicio.getTime() >= semanaAtualInicio.getTime()) {
+      const idsOrfaos = planejadas
+        .filter(p =>
+          p.diaSemana !== null &&
+          p.tarefa?.prazo &&
+          (new Date(p.tarefa.prazo) < semanaInicio || new Date(p.tarefa.prazo) >= semanaFimExclusiva)
+        )
+        .map(p => p.id)
+      if (idsOrfaos.length > 0) {
+        await prisma.tarefaSemana.deleteMany({ where: { id: { in: idsOrfaos } } })
+        planejadas = planejadas.filter(p => !idsOrfaos.includes(p.id))
+      }
+    }
+
     const idsTarefaNaSemana = new Set(planejadas.filter(p => p.tarefaId).map(p => p.tarefaId))
 
     const backlog = tarefasBruto
@@ -129,6 +163,7 @@ export async function GET(request: NextRequest) {
         justificativa: p.justificativa,
         titulo: p.tarefa?.titulo,
         projeto: p.tarefa?.projeto,
+        prazo: p.tarefa?.prazo,
         concluida: p.tarefa?.status === 'CONCLUIDA',
       })),
     })
@@ -160,6 +195,15 @@ export async function POST(request: NextRequest) {
       create: { tarefaId: itemId, usuarioId, semanaInicio, diaSemana: diaSemana ?? null },
       update: {},
     })
+
+    // Se já entrou direto num dia específico, mantém o prazo da tarefa
+    // sincronizado com esse dia (uma atividade só tem uma data — ver dataDoDia).
+    if (diaSemana !== undefined && diaSemana !== null) {
+      await prisma.tarefa.update({
+        where: { id: itemId },
+        data: { prazo: dataDoDia(semanaInicio, Number(diaSemana)) },
+      }).catch(() => {})
+    }
 
     return NextResponse.json({ item })
   } catch (err) {
@@ -268,6 +312,19 @@ export async function PATCH(request: NextRequest) {
           data: { missaoDia: false },
         })
       }
+
+      // Uma atividade só tem UMA data: sempre que o dia da semana muda pra
+      // um dia específico (remarcação normal, ou missão do dia movida pra
+      // hoje), o prazo real da tarefa (o que aparece no Operacional) é
+      // atualizado junto — evita a tarefa mostrar um dia aqui e um prazo
+      // diferente lá.
+      if (typeof data.diaSemana === 'number') {
+        await tx.tarefa.update({
+          where: { id: item.tarefaId },
+          data: { prazo: dataDoDia(item.semanaInicio, data.diaSemana) },
+        })
+      }
+
       return tx.tarefaSemana.update({ where: { id }, data })
     })
 

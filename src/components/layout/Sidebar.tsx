@@ -4,10 +4,19 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import {
-  LayoutDashboard, Settings,
+  LayoutDashboard, Settings, Sparkles,
   ClipboardList, BarChart3, ChevronLeft, ChevronRight, X, ListChecks, Users2
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+
+// "Início" é a área pessoal do usuário (só as próprias atividades) — fica
+// sempre visível pra todo mundo, fora do sistema de permissão por módulo
+// (modulosAcesso), porque não expõe nada que dependa de perfil/departamento.
+const itemInicio = {
+  href: '/inicio',
+  label: 'Início',
+  icon: Sparkles,
+}
 
 const navItems = [
   {
@@ -132,6 +141,44 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, modulo
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-4 px-2 space-y-1">
+          {/* Início — sempre visível, não passa pelo filtro de módulos */}
+          {(() => {
+            const item = itemInicio
+            const Icon = item.icon
+            const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={onMobileClose}
+                className={cn(
+                  'flex items-center rounded-xl transition-all duration-150 group relative',
+                  collapsed ? 'justify-center p-2.5' : 'gap-3 px-3 py-2.5',
+                  isActive
+                    ? 'bg-green-50 text-green-700'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                )}
+                title={collapsed ? item.label : undefined}
+              >
+                <Icon className={cn(
+                  'w-5 h-5 flex-shrink-0',
+                  isActive ? 'text-green-600' : 'text-gray-400 group-hover:text-gray-600'
+                )} />
+                {!collapsed && (
+                  <span className="font-medium text-sm">{item.label}</span>
+                )}
+                {isActive && !collapsed && (
+                  <div className="ml-auto w-1.5 h-1.5 rounded-full bg-green-600" />
+                )}
+                {collapsed && (
+                  <div className="absolute left-full ml-2 px-2 py-1 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                    {item.label}
+                  </div>
+                )}
+              </Link>
+            )
+          })()}
+          <div className={cn('border-t border-gray-100', collapsed ? 'mx-1 my-1' : 'mx-1 my-2')} />
           {navItems.filter(item => podeVer(item.modulo)).map((item) => {
             const Icon = item.icon
             const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
