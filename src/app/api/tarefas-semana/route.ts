@@ -109,25 +109,52 @@ export async function GET(request: NextRequest) {
     }
 
     // ── Consistência: uma atividade só tem UMA data ──────────────────────
-    // Se o prazo da tarefa foi alterado depois (lá no Operacional) e não cai
-    // mais dentro desta semana, o item planejado aqui ficou "órfão" — mostra
-    // um dia que não bate mais com o prazo real. Remove esses itens da
-    // semana atual/futura (a auto-planejamento acima já recria certinho na
-    // semana correta quando ela for aberta). Semanas passadas não são
-    // mexidas — ficam como registro histórico do que foi planejado/cumprido
-    // para a análise de performance.
+    // O prazo da tarefa (editável no Operacional) é a única fonte de verdade
+    // da data — diaSemana/semanaInicio aqui são só o jeito de agrupar essa
+    // mesma data por semana. Toda vez que a tela é aberta, cada item já
+    // planejado é conferido contra o prazo real da tarefa:
+    //  • prazo mudou de semana inteira → o item daqui é removido (a
+    //    auto-planejamento acima recria certinho na semana correta quando
+    //    ela for aberta);
+    //  • prazo continua nesta semana mas num dia diferente do que está
+    //    marcado (ex: registro antigo de antes dessa sincronização existir,
+    //    ou uma corrida entre duas abas abertas ao mesmo tempo) → corrige o
+    //    diaSemana na hora, pra nunca mostrar um dia aqui e um prazo
+    //    diferente lá no Operacional.
+    // Semanas passadas não são mexidas — ficam como registro histórico do
+    // que foi planejado/cumprido, para a análise de performance.
     const semanaAtualInicio = segundaFeiraDaSemana(new Date())
     if (semanaInicio.getTime() >= semanaAtualInicio.getTime()) {
-      const idsOrfaos = planejadas
-        .filter(p =>
-          p.diaSemana !== null &&
-          p.tarefa?.prazo &&
-          (new Date(p.tarefa.prazo) < semanaInicio || new Date(p.tarefa.prazo) >= semanaFimExclusiva)
-        )
-        .map(p => p.id)
-      if (idsOrfaos.length > 0) {
-        await prisma.tarefaSemana.deleteMany({ where: { id: { in: idsOrfaos } } })
-        planejadas = planejadas.filter(p => !idsOrfaos.includes(p.id))
+      const idsParaRemover: string[] = []
+      const paraResincronizar: { id: string; diaCorreto: number }[] = []
+
+      for (const p of planejadas) {
+        if (p.diaSemana === null || !p.tarefa?.prazo) continue
+        const prazoData = new Date(p.tarefa.prazo)
+        if (prazoData < semanaInicio || prazoData >= semanaFimExclusiva) {
+          idsParaRemover.push(p.id)
+        } else {
+          const diaCorreto = diaIndexDeData(prazoData)
+          if (diaCorreto !== p.diaSemana) {
+            paraResincronizar.push({ id: p.id, diaCorreto })
+          }
+        }
+      }
+
+      if (idsParaRemover.length > 0) {
+        await prisma.tarefaSemana.deleteMany({ where: { id: { in: idsParaRemover } } })
+      }
+      if (paraResincronizar.length > 0) {
+        await Promise.all(paraResincronizar.map(r =>
+          prisma.tarefaSemana.update({ where: { id: r.id }, data: { diaSemana: r.diaCorreto } })
+        ))
+      }
+      if (idsParaRemover.length > 0 || paraResincronizar.length > 0) {
+        planejadas = await prisma.tarefaSemana.findMany({
+          where: { usuarioId, semanaInicio },
+          include: includePlanejadas,
+          orderBy: { criadoEm: 'asc' },
+        })
       }
     }
 
