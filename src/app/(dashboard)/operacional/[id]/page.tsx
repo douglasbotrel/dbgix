@@ -652,7 +652,7 @@ export default function ProjetoDetalhe() {
                                 )}
                                 {campoAgendado && (
                                   <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-medium">
-                                    📅 {new Date(tarefa.dataCampo).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                                    📅 {new Date(tarefa.dataCampo).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', timeZone: 'UTC' })}
                                   </span>
                                 )}
                                 {tarefa.responsavel ? (
@@ -666,7 +666,7 @@ export default function ProjetoDetalhe() {
                                 )}
                                 {tarefa.prazo && !campoAgendado ? (
                                   <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
-                                    {new Date(tarefa.prazo).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                                    {new Date(tarefa.prazo).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', timeZone: 'UTC' })}
                                   </span>
                                 ) : !campoAgendado && !aguardaCampo ? (
                                   <span className="text-xs bg-amber-50 text-amber-500 border border-amber-200 px-2 py-0.5 rounded-full">
@@ -731,7 +731,7 @@ export default function ProjetoDetalhe() {
                                       </div>
                                     ) : (
                                       <span className="text-xs text-green-700 bg-green-50 border border-green-200 px-2.5 py-2 rounded-lg font-medium self-end">
-                                        📅 Campo: {new Date(tarefa.dataCampo).toLocaleDateString('pt-BR')}
+                                        📅 Campo: {new Date(tarefa.dataCampo).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}
                                       </span>
                                     )}
 

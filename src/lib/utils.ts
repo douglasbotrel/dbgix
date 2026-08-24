@@ -7,14 +7,32 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+// Campos de "só data" (prazo, dataConclusao, dataPrazo, dataCampo, etc.) vêm
+// de um <input type="date"> — sem fuso horário — e são gravados como meia-
+// -noite UTC exata (new Date("2026-08-25") = 2026-08-25T00:00:00.000Z).
+// Se isso for formatado usando o fuso LOCAL do navegador (o que o date-fns
+// faz por padrão), num fuso atrás de UTC (ex: Brasil, UTC-3) a meia-noite UTC
+// vira 21h do dia anterior — a data exibida "anda" um dia pra trás.
+// Detecta esse caso (hora exata 00:00:00.000 UTC — na prática só acontece
+// em campo de data pura, nunca num timestamp real como criadoEm) e
+// compensa o deslocamento do fuso antes de formatar, pra sempre mostrar o
+// dia certo, em qualquer fuso horário de quem está vendo.
+function ajustarSeDataPura(d: Date): Date {
+  const ehDataPura =
+    d.getUTCHours() === 0 && d.getUTCMinutes() === 0 &&
+    d.getUTCSeconds() === 0 && d.getUTCMilliseconds() === 0
+  if (!ehDataPura) return d
+  return new Date(d.getTime() + d.getTimezoneOffset() * 60000)
+}
+
 export function formatDate(date: Date | string | null): string {
   if (!date) return '-'
-  return format(new Date(date), 'dd/MM/yyyy', { locale: ptBR })
+  return format(ajustarSeDataPura(new Date(date)), 'dd/MM/yyyy', { locale: ptBR })
 }
 
 export function formatDateTime(date: Date | string | null): string {
   if (!date) return '-'
-  return format(new Date(date), 'dd/MM/yyyy HH:mm', { locale: ptBR })
+  return format(ajustarSeDataPura(new Date(date)), 'dd/MM/yyyy HH:mm', { locale: ptBR })
 }
 
 export function formatRelativeDate(date: Date | string | null): string {

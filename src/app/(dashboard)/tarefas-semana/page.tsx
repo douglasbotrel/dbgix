@@ -29,6 +29,15 @@ function formatDataCurta(d: string | Date) {
   return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
 }
 
+// Prazo de tarefa vem gravado como meia-noite UTC exata (campo de "só
+// data"). Formatar com o fuso UTC evita que, num fuso atrás de UTC (ex:
+// Brasil), a data exibida "ande" um dia pra trás — diferente de
+// formatDataCurta acima, que formata datas já calculadas no fuso local
+// (início/fim da semana), essas sim sem esse problema.
+function formatPrazoCurta(d: string | Date) {
+  return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' })
+}
+
 function agruparPorProjeto(lista: any[]) {
   const grupos = new Map<string, { projeto: any; itens: any[] }>()
   for (const t of lista) {
@@ -425,7 +434,7 @@ export default function TarefasSemanaPage() {
                                     {t.prazo && (
                                       <p className={`text-xs truncate flex items-center gap-1 ${urg.texto}`}>
                                         {urg.texto === 'text-red-600' && <AlertTriangle className="w-3 h-3" />}
-                                        prazo {formatDataCurta(t.prazo)}
+                                        prazo {formatPrazoCurta(t.prazo)}
                                       </p>
                                     )}
                                   </div>
