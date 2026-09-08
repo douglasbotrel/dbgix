@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import {
   ArrowLeft, Plus, Check, FileText,
   User, Calendar, Loader2,
-  Edit2, Save, Clock, AlertCircle, MessageSquare,
+  Edit2, Save, Clock, AlertCircle, MessageSquare, Trash2,
 } from 'lucide-react'
 import {
   formatDate,
@@ -63,6 +63,10 @@ export default function ProjetoDetalhe() {
   const [modalProtocolo, setModalProtocolo]       = useState(false)
   const [protocoloForm, setProtocoloForm]         = useState({ data: '', codigoOrgao: '' })
   const [salvandoProtocolo, setSalvandoProtocolo] = useState(false)
+  // Modal de exclusão de projeto (somente ADMIN — exige motivo rastreável)
+  const [modalExcluir, setModalExcluir]           = useState(false)
+  const [motivoExclusao, setMotivoExclusao]       = useState('')
+  const [excluindo, setExcluindo]                 = useState(false)
 
   const ROLES_GESTOR      = ['ADMIN', 'GESTOR_GERAL', 'GESTOR_OPERACIONAL', 'SUPERVISOR']
   const HOJE_STR          = new Date().toISOString().split('T')[0]
@@ -328,6 +332,31 @@ export default function ProjetoDetalhe() {
     finally { setIniciandoExecucao(false) }
   }
 
+  // ── Excluir projeto (somente ADMIN, exige motivo) ────────────
+  async function excluirProjeto() {
+    if (!motivoExclusao.trim()) {
+      toast.error('Informe o motivo da exclusão')
+      return
+    }
+    setExcluindo(true)
+    try {
+      const res = await fetch(`/api/projetos/${id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ motivo: motivoExclusao.trim() }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || 'Erro ao excluir projeto')
+        return
+      }
+      toast.success('Projeto excluído')
+      setModalExcluir(false)
+      router.push('/operacional')
+    } catch { toast.error('Erro ao excluir projeto') }
+    finally { setExcluindo(false) }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -360,13 +389,26 @@ export default function ProjetoDetalhe() {
 
       {/* ── Header ──────────────────────────────────────────── */}
       <div className="flex flex-col gap-3">
-        <button
-          onClick={() => router.push('/operacional')}
-          className="flex items-center gap-2 text-gray-500 hover:text-gray-700 font-medium text-sm w-fit"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Voltar
-        </button>
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => router.push('/operacional')}
+            className="flex items-center gap-2 text-gray-500 hover:text-gray-700 font-medium text-sm w-fit"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Voltar
+          </button>
+
+          {currentUser?.role === 'ADMIN' && projeto.etapaPipeline !== 'CANCELADO' && (
+            <button
+              onClick={() => setModalExcluir(true)}
+              className="flex items-center gap-2 text-red-500 hover:text-red-700 font-medium text-sm w-fit"
+              title="Excluir projeto"
+            >
+              <Trash2 className="w-4 h-4" />
+              Excluir Projeto
+            </button>
+          )}
+        </div>
 
         <div className="flex flex-col sm:flex-row sm:items-start gap-3">
           <div className="flex-1 min-w-0">
@@ -1341,6 +1383,69 @@ export default function ProjetoDetalhe() {
                 className="px-5 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm font-medium"
               >
                 Pular
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal de exclusão de projeto ──────────────────────── */}
+      {modalExcluir && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="font-bold text-gray-900">🗑️ Excluir Projeto</h2>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {projeto.codigo} — {projeto.nome}
+                </p>
+              </div>
+              <button
+                onClick={() => { setModalExcluir(false); setMotivoExclusao('') }}
+                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Formulário */}
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                ⚠️ O projeto deixará de aparecer nas listas ativas. O histórico, tarefas e
+                documentos são preservados e o motivo informado abaixo fica registrado e
+                rastreável no histórico do projeto.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Motivo da exclusão *
+                </label>
+                <textarea
+                  value={motivoExclusao}
+                  onChange={e => setMotivoExclusao(e.target.value)}
+                  placeholder="Explique por que este projeto está sendo excluído"
+                  rows={3}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            {/* Ações */}
+            <div className="px-6 pb-5 flex gap-2">
+              <button
+                onClick={excluirProjeto}
+                disabled={excluindo || !motivoExclusao.trim()}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold transition-colors"
+              >
+                {excluindo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                Confirmar Exclusão
+              </button>
+              <button
+                onClick={() => { setModalExcluir(false); setMotivoExclusao('') }}
+                className="px-5 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 rounded-xl text-sm font-medium"
+              >
+                Cancelar
               </button>
             </div>
           </div>

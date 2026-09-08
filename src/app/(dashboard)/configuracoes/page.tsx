@@ -43,6 +43,11 @@ export default function ConfiguracoesPage() {
   const [excluindoUsuario, setExcluindoUsuario] = useState<string | null>(null)
   const [verSenhaCriar, setVerSenhaCriar] = useState(false)
   const [verSenhaEditar, setVerSenhaEditar] = useState(false)
+  // Usuário "excluído" é só desativado (ativo=false), nunca apagado de
+  // verdade — ele fica ligado a projetos, tarefas e histórico que precisam
+  // continuar existindo. Por padrão a lista some com quem foi desativado,
+  // mas dá pra reexibir (e reativar pela edição) quando precisar.
+  const [mostrarInativos, setMostrarInativos] = useState(false)
 
   // Form novo usuário
   const [formUser, setFormUser] = useState({
@@ -283,6 +288,9 @@ export default function ConfiguracoesPage() {
     finally { setSalvandoTarefas(false) }
   }
 
+  const usuariosInativos = usuarios.filter(u => !u.ativo)
+  const usuariosVisiveis = mostrarInativos ? usuarios : usuarios.filter(u => u.ativo)
+
   // Sugestões de categoria = categorias já usadas em outros tipos de serviço
   // cadastrados. Se ainda não existe nenhuma, "Outro" fica como única opção.
   const categoriasExistentes = Array.from(new Set(servicos.map(s => s.categoria).filter(Boolean))) as string[]
@@ -318,7 +326,17 @@ export default function ConfiguracoesPage() {
       {aba === 'usuarios' && (
         <div className="space-y-4">
           <div className="flex justify-between items-center">
-            <p className="text-sm text-gray-500">{usuarios.length} usuário(s) cadastrado(s)</p>
+            <div className="flex items-center gap-3">
+              <p className="text-sm text-gray-500">{usuariosVisiveis.length} usuário(s) ativo(s)</p>
+              {usuariosInativos.length > 0 && (
+                <button
+                  onClick={() => setMostrarInativos(v => !v)}
+                  className="text-xs text-gray-400 hover:text-gray-600 underline decoration-dotted"
+                >
+                  {mostrarInativos ? 'Ocultar' : 'Mostrar'} {usuariosInativos.length} inativo(s)
+                </button>
+              )}
+            </div>
             <button onClick={() => setModalUsuario(true)}
               className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-2 rounded-xl text-sm transition-colors">
               <Plus className="w-4 h-4" /> Novo Usuário
@@ -343,7 +361,7 @@ export default function ConfiguracoesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {usuarios.map(u => {
+                  {usuariosVisiveis.map(u => {
                     const modulos: string[] = u.modulosAcesso ? JSON.parse(u.modulosAcesso) : []
                     return (
                       <tr key={u.id} className="hover:bg-gray-50 transition-colors">

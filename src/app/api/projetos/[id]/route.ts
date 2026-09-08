@@ -214,16 +214,67 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   }
 }
 
+// Exclusão de projeto: restrita a ADMIN e sempre com motivo obrigatório e
+// rastreável. Não é uma exclusão física (prisma.projeto.delete) — tarefas,
+// comentários, documentos e histórico ficam ligados ao projeto por relações
+// obrigatórias sem cascade, então um delete físico quebraria com erro de FK
+// em qualquer projeto que já tenha uso real. Em vez disso, seguimos o mesmo
+// padrão de soft-delete já usado para usuários: o projeto é marcado como
+// CANCELADO (etapaPipeline e statusOperacional) e some das listagens ativas,
+// mas continua existindo — com o motivo registrado em HistoricoStatus (a
+// mesma tela "Histórico" que o projeto já exibe) e em Log para auditoria.
 export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
-    if (!['ADMIN', 'GESTOR_GERAL'].includes(user.role)) {
-      return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
+    if (user.role !== 'ADMIN') {
+      return NextResponse.json({ error: 'Somente administradores podem excluir projetos' }, { status: 403 })
     }
-    await prisma.projeto.delete({ where: { id: params.id } })
-    return NextResponse.json({ success: true })
+
+    const body = await request.json().catch(() => ({}))
+    const motivo = typeof body.motivo === 'string' ? body.motivo.trim() : ''
+    if (!motivo) {
+      return NextResponse.json({ error: 'Informe o motivo da exclusão' }, { status: 400 })
+    }
+
+    const projeto = await prisma.projeto.findUnique({ where: { id: params.id } })
+    if (!projeto) return NextResponse.json({ error: 'Projeto não encontrado' }, { status: 404 })
+    if (projeto.etapaPipeline === 'CANCELADO') {
+      return NextResponse.json({ error: 'Este projeto já foi excluído' }, { status: 400 })
+    }
+
+    const projetoAtualizado = await prisma.projeto.update({
+      where: { id: params.id },
+      data: {
+        etapaPipeline: 'CANCELADO',
+        statusOperacional: 'CANCELADO',
+      },
+    })
+
+    await prisma.historicoStatus.create({
+      data: {
+        projetoId: params.id,
+        statusAnterior: projeto.etapaPipeline,
+        statusNovo: 'CANCELADO',
+        campo: 'etapaPipeline',
+        observacao: `Projeto excluído por ${user.nome}. Motivo: ${motivo}`,
+        usuarioId: user.id,
+      },
+    }).catch(() => {})
+
+    await prisma.log.create({
+      data: {
+        usuarioId: user.id,
+        acao: 'EXCLUIR_PROJETO',
+        entidade: 'Projeto',
+        entidadeId: params.id,
+        detalhes: JSON.stringify({ codigo: projeto.codigo, nome: projeto.nome, motivo }),
+      },
+    }).catch(() => {})
+
+    return NextResponse.json({ success: true, projeto: projetoAtualizado })
   } catch (error) {
+    console.error('Erro ao excluir projeto:', error)
     return NextResponse.json({ error: 'Erro interno' }, { status: 500 })
   }
 }
