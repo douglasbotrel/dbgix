@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { toast } from 'sonner'
-import { RefreshCw, Loader2, Target, Zap, ClipboardCheck, AlertTriangle, ShieldCheck } from 'lucide-react'
+import { RefreshCw, Loader2, Target, Zap, ClipboardCheck, AlertTriangle, ShieldCheck, UserCog } from 'lucide-react'
 import { ROLE_LABELS } from '@/lib/utils'
 
 const OPCOES_PERIODO = [
@@ -71,6 +72,14 @@ export default function GestaoPessoasPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            href="/configuracoes"
+            className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+            title="Criar, editar ou desativar usuários"
+          >
+            <UserCog className="w-4 h-4" />
+            Gerenciar Usuários
+          </Link>
           <select
             value={semanas}
             onChange={e => setSemanas(Number(e.target.value))}

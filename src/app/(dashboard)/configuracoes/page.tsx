@@ -1,9 +1,9 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
-import { Plus, X, Loader2, Check, ChevronDown, ChevronUp, Trash2, Edit2, ToggleLeft, ToggleRight } from 'lucide-react'
-import { ROLE_LABELS, DEPARTAMENTO_LABELS, MODULOS_POR_ROLE } from '@/lib/utils'
+import { Plus, X, Loader2, Check, ChevronDown, ChevronUp, Trash2, Edit2, ToggleLeft, ToggleRight, Eye, EyeOff } from 'lucide-react'
+import { ROLE_LABELS, MODULOS_POR_ROLE } from '@/lib/utils'
 
 const MODULOS = [
   { id: 'dashboard',      label: '📊 Dashboard' },
@@ -14,51 +14,7 @@ const MODULOS = [
   { id: 'configuracoes',  label: '🔧 Configurações' },
 ]
 
-const ORG_HIERARQUIA = [
-  {
-    role: 'ADMIN', cor: 'bg-purple-100 text-purple-800 border-purple-200',
-    sub: [
-      {
-        role: 'GESTOR_GERAL', cor: 'bg-blue-100 text-blue-800 border-blue-200',
-        sub: [
-          { role: 'GESTOR_ADMINISTRATIVO', cor: 'bg-indigo-100 text-indigo-800 border-indigo-200', sub: [] },
-          {
-            role: 'GESTOR_OPERACIONAL', cor: 'bg-cyan-100 text-cyan-800 border-cyan-200',
-            sub: [
-              {
-                role: 'SUPERVISOR', cor: 'bg-teal-100 text-teal-800 border-teal-200',
-                sub: [
-                  { role: 'ANALISTA', cor: 'bg-green-100 text-green-800 border-green-200', sub: [] },
-                  { role: 'ANALISTA_RAPIDO', cor: 'bg-lime-100 text-lime-800 border-lime-200', sub: [] },
-                ],
-              },
-            ],
-          },
-          {
-            role: 'GESTOR_CAMPO', cor: 'bg-orange-100 text-orange-800 border-orange-200',
-            sub: [
-              { role: 'TECNICO_CAMPO', cor: 'bg-amber-100 text-amber-800 border-amber-200', sub: [] },
-            ],
-          },
-        ],
-      },
-    ],
-  },
-]
-
-const TIPOS_USUARIO_DESC: Record<string, string> = {
-  ADMIN:                'Acesso total ao sistema, incluindo configurações e gerenciamento de usuários.',
-  GESTOR_GERAL:         'Visão completa do pipeline, relatórios e indicadores de toda a empresa.',
-  GESTOR_ADMINISTRATIVO:'Gestão administrativa e aprovações de processos internos.',
-  GESTOR_OPERACIONAL:   'Supervisão de projetos operacionais, equipes e prazos.',
-  GESTOR_CAMPO:         'Coordenação de vistorias, frota e trabalho de campo.',
-  SUPERVISOR:           'Supervisão de analistas e aprovação de etapas operacionais.',
-  ANALISTA:             'Execução de tarefas, vistorias e projetos operacionais.',
-  ANALISTA_RAPIDO:      'Análise técnica rápida de novas solicitações de serviço.',
-  TECNICO_CAMPO:        'Realização de vistorias e coleta de dados técnicos em campo.',
-}
-
-type Aba = 'usuarios' | 'hierarquia' | 'servicos'
+type Aba = 'usuarios' | 'servicos'
 
 export default function ConfiguracoesPage() {
   const [aba, setAba] = useState<Aba>('usuarios')
@@ -85,6 +41,8 @@ export default function ConfiguracoesPage() {
   const [confirmandoExclusao, setConfirmandoExclusao] = useState<string | null>(null)
   const [confirmandoExclusaoUsuario, setConfirmandoExclusaoUsuario] = useState<string | null>(null)
   const [excluindoUsuario, setExcluindoUsuario] = useState<string | null>(null)
+  const [verSenhaCriar, setVerSenhaCriar] = useState(false)
+  const [verSenhaEditar, setVerSenhaEditar] = useState(false)
 
   // Form novo usuário
   const [formUser, setFormUser] = useState({
@@ -92,17 +50,6 @@ export default function ConfiguracoesPage() {
     role: 'ANALISTA', departamento: 'OPERACIONAL_AMBIENTAL',
     modulosAcesso: ['dashboard', 'operacional'] as string[],
   })
-
-  // Matriz de permissões por perfil
-  const [matrizEdit, setMatrizEdit] = useState<Record<string, string[]>>(() => {
-    const base: Record<string, string[]> = {}
-    Object.keys(ROLE_LABELS).forEach(role => {
-      const mods = MODULOS_POR_ROLE[role]
-      base[role] = mods === null ? MODULOS.map(m => m.id) : [...(mods ?? [])]
-    })
-    return base
-  })
-  const [aplicandoPerfil, setAplicandoPerfil] = useState<string | null>(null)
 
   // Edição de usuário existente
   const [usuarioEditando, setUsuarioEditando] = useState<any | null>(null)
@@ -126,38 +73,6 @@ export default function ConfiguracoesPage() {
       novaSenha: '',
     })
     setUsuarioEditando(u)
-  }
-
-  function toggleMatrizModulo(role: string, moduloId: string) {
-    setMatrizEdit(prev => ({
-      ...prev,
-      [role]: prev[role]?.includes(moduloId)
-        ? prev[role].filter(m => m !== moduloId)
-        : [...(prev[role] ?? []), moduloId],
-    }))
-  }
-
-  async function aplicarAoPerfil(role: string) {
-    if (['ADMIN', 'GESTOR_GERAL'].includes(role)) return
-    setAplicandoPerfil(role)
-    try {
-      const res = await fetch('/api/usuarios')
-      if (!res.ok) throw new Error()
-      const { usuarios: lista } = await res.json()
-      const doPerfil = lista.filter((u: any) => u.role === role)
-      await Promise.all(doPerfil.map((u: any) =>
-        fetch(`/api/usuarios/${u.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ modulosAcesso: JSON.stringify(matrizEdit[role] ?? []) }),
-        })
-      ))
-      toast.success(`Módulos aplicados a ${doPerfil.length} usuário(s) do perfil "${ROLE_LABELS[role]}"`)
-    } catch {
-      toast.error('Erro ao aplicar permissões')
-    } finally {
-      setAplicandoPerfil(null)
-    }
   }
 
   function toggleModuloEdit(id: string) {
@@ -368,24 +283,6 @@ export default function ConfiguracoesPage() {
     finally { setSalvandoTarefas(false) }
   }
 
-  function renderOrgNode(nodes: any[], depth = 0): React.ReactNode {
-    return (
-      <div className={depth > 0 ? 'ml-8 mt-2 border-l-2 border-gray-100 pl-4' : ''}>
-        {nodes.map((node: any) => (
-          <div key={node.role} className="mb-2">
-            <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm font-medium ${node.cor}`}>
-              <span>{ROLE_LABELS[node.role]}</span>
-              {MODULOS_POR_ROLE[node.role] === null && (
-                <span className="text-xs bg-white/60 px-1.5 py-0.5 rounded-full">Acesso Total</span>
-              )}
-            </div>
-            {node.sub?.length > 0 && renderOrgNode(node.sub, depth + 1)}
-          </div>
-        ))}
-      </div>
-    )
-  }
-
   // Sugestões de categoria = categorias já usadas em outros tipos de serviço
   // cadastrados. Se ainda não existe nenhuma, "Outro" fica como única opção.
   const categoriasExistentes = Array.from(new Set(servicos.map(s => s.categoria).filter(Boolean))) as string[]
@@ -405,7 +302,6 @@ export default function ConfiguracoesPage() {
         <div className="flex gap-0 overflow-x-auto">
           {([
             { id: 'usuarios',   label: '👥 Usuários' },
-            { id: 'hierarquia', label: '🏢 Hierarquia' },
             { id: 'servicos',   label: '🌿 Tipos de Serviço' },
           ] as { id: Aba; label: string }[]).map(a => (
             <button key={a.id} onClick={() => setAba(a.id)}
@@ -531,108 +427,6 @@ export default function ConfiguracoesPage() {
               </table>
             </div>
           )}
-        </div>
-      )}
-
-      {/* ── HIERARQUIA ── */}
-      {aba === 'hierarquia' && (
-        <div className="space-y-6">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">Organograma da Empresa</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Estrutura hierárquica e módulos de acesso por perfil</p>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-gray-100 p-6 overflow-x-auto">
-            {renderOrgNode(ORG_HIERARQUIA)}
-          </div>
-
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">Matriz de Permissões por Perfil</h2>
-            <p className="text-sm text-gray-500 mt-0.5">
-              Defina quais módulos cada perfil pode acessar. Clique em <strong>Aplicar</strong> para atualizar todos os usuários do perfil.
-            </p>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-gray-100 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 w-48">Perfil</th>
-                  {MODULOS.map(m => (
-                    <th key={m.id} className="text-center px-2 py-3 text-xs font-semibold text-gray-500 min-w-[80px]">
-                      <div>{m.label.replace(/^[^\s]+\s/, '')}</div>
-                    </th>
-                  ))}
-                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 w-32">Ação</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {Object.entries(ROLE_LABELS).map(([role, label]) => {
-                  const isUnlimited = ['ADMIN', 'GESTOR_GERAL'].includes(role)
-                  return (
-                    <tr key={role} className="hover:bg-gray-50/50 transition-colors">
-                      <td className="px-4 py-3">
-                        <p className="font-medium text-gray-900 text-sm">{label}</p>
-                        {isUnlimited && (
-                          <span className="text-xs text-purple-600 font-medium">Acesso irrestrito</span>
-                        )}
-                      </td>
-                      {MODULOS.map(m => (
-                        <td key={m.id} className="text-center px-2 py-3">
-                          {isUnlimited ? (
-                            <span className="text-green-500 text-base">✓</span>
-                          ) : (
-                            <input
-                              type="checkbox"
-                              checked={matrizEdit[role]?.includes(m.id) ?? false}
-                              onChange={() => toggleMatrizModulo(role, m.id)}
-                              className="accent-green-600 w-4 h-4 cursor-pointer"
-                            />
-                          )}
-                        </td>
-                      ))}
-                      <td className="px-4 py-3 text-right">
-                        {!isUnlimited && (
-                          <button
-                            onClick={() => aplicarAoPerfil(role)}
-                            disabled={aplicandoPerfil === role}
-                            className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1.5 ml-auto disabled:opacity-50"
-                          >
-                            {aplicandoPerfil === role
-                              ? <><Loader2 className="w-3 h-3 animate-spin" /> Aplicando...</>
-                              : 'Aplicar'}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-            <div className="px-4 py-3 bg-amber-50 border-t border-amber-100 rounded-b-2xl">
-              <p className="text-xs text-amber-700">
-                <strong>Atenção:</strong> "Aplicar" atualiza os módulos de <em>todos</em> os usuários daquele perfil. Para personalizar individualmente, use a aba <strong>Usuários</strong>.
-              </p>
-            </div>
-          </div>
-
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">Descrição dos Perfis</h2>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {Object.entries(ROLE_LABELS).map(([role, label]) => (
-              <div key={role} className="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-sm transition-shadow">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <p className="font-semibold text-gray-900">{label}</p>
-                    <p className="text-xs text-gray-400 font-mono">{role}</p>
-                  </div>
-                  <span className="text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded-full font-medium">Ativo</span>
-                </div>
-                <p className="text-sm text-gray-600">{TIPOS_USUARIO_DESC[role] || 'Perfil de acesso do sistema.'}</p>
-              </div>
-            ))}
-          </div>
         </div>
       )}
 
@@ -886,34 +680,28 @@ export default function ConfiguracoesPage() {
                   className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Perfil de Acesso</label>
-                  <select value={formEdit.role} onChange={e => {
-                    const novoRole = e.target.value
-                    const mods = MODULOS_POR_ROLE[novoRole]
-                    setFormEdit(p => ({
-                      ...p,
-                      role: novoRole,
-                      modulosAcesso: mods === null ? MODULOS.map(m => m.id) : [...(mods ?? ['dashboard'])],
-                    }))
-                  }}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
-                    {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Departamento</label>
-                  <select value={formEdit.departamento} onChange={e => setFormEdit(p => ({ ...p, departamento: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
-                    {Object.entries(DEPARTAMENTO_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select>
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Perfil</label>
+                <select value={formEdit.role} onChange={e => {
+                  const novoRole = e.target.value
+                  const mods = MODULOS_POR_ROLE[novoRole]
+                  setFormEdit(p => ({
+                    ...p,
+                    role: novoRole,
+                    modulosAcesso: mods === null ? MODULOS.map(m => m.id) : [...(mods ?? ['dashboard'])],
+                  }))
+                }}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
+                  {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <p className="text-xs text-gray-400 mt-1">
+                  Só define se a pessoa é administradora. O que ela realmente enxerga no sistema é controlado pelos módulos abaixo.
+                </p>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Módulos com Acesso
+                  Abas com Acesso
                   <span className="text-xs text-gray-400 font-normal ml-1">({formEdit.modulosAcesso.length} selecionado(s))</span>
                 </label>
                 <div className="grid grid-cols-2 gap-2">
@@ -937,9 +725,17 @@ export default function ConfiguracoesPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Nova Senha <span className="text-gray-400 font-normal">(deixe em branco para não alterar)</span>
                 </label>
-                <input type="password" value={formEdit.novaSenha} onChange={e => setFormEdit(p => ({ ...p, novaSenha: e.target.value }))}
-                  placeholder="Mín. 8 chars, 1 maiúscula, 1 número"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
+                <div className="relative">
+                  <input type={verSenhaEditar ? 'text' : 'password'} value={formEdit.novaSenha}
+                    onChange={e => setFormEdit(p => ({ ...p, novaSenha: e.target.value }))}
+                    placeholder="Mín. 8 chars, 1 maiúscula, 1 número"
+                    className="w-full px-3 py-2 pr-10 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
+                  <button type="button" onClick={() => setVerSenhaEditar(v => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    title={verSenhaEditar ? 'Ocultar senha' : 'Mostrar senha'}>
+                    {verSenhaEditar ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
@@ -988,37 +784,40 @@ export default function ConfiguracoesPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Senha *</label>
-                <input type="password" value={formUser.senha} onChange={e => setFormUser(p => ({ ...p, senha: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
+                <div className="relative">
+                  <input type={verSenhaCriar ? 'text' : 'password'} value={formUser.senha}
+                    onChange={e => setFormUser(p => ({ ...p, senha: e.target.value }))}
+                    placeholder="Mín. 8 chars, 1 maiúscula, 1 número"
+                    className="w-full px-3 py-2 pr-10 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
+                  <button type="button" onClick={() => setVerSenhaCriar(v => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    title={verSenhaCriar ? 'Ocultar senha' : 'Mostrar senha'}>
+                    {verSenhaCriar ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Perfil de Acesso</label>
-                  <select value={formUser.role} onChange={e => {
-                    const novoRole = e.target.value
-                    const mods = MODULOS_POR_ROLE[novoRole]
-                    setFormUser(p => ({
-                      ...p,
-                      role: novoRole,
-                      modulosAcesso: mods === null ? MODULOS.map(m => m.id) : [...(mods ?? ['dashboard'])],
-                    }))
-                  }}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
-                    {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Departamento</label>
-                  <select value={formUser.departamento} onChange={e => setFormUser(p => ({ ...p, departamento: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
-                    {Object.entries(DEPARTAMENTO_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select>
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Perfil</label>
+                <select value={formUser.role} onChange={e => {
+                  const novoRole = e.target.value
+                  const mods = MODULOS_POR_ROLE[novoRole]
+                  setFormUser(p => ({
+                    ...p,
+                    role: novoRole,
+                    modulosAcesso: mods === null ? MODULOS.map(m => m.id) : [...(mods ?? ['dashboard'])],
+                  }))
+                }}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
+                  {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <p className="text-xs text-gray-400 mt-1">
+                  Só define se a pessoa é administradora. O que ela realmente enxerga no sistema é controlado pelos módulos abaixo.
+                </p>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Módulos com Acesso
+                  Abas com Acesso
                   <span className="text-xs text-gray-400 font-normal ml-1">({formUser.modulosAcesso.length} selecionado(s))</span>
                 </label>
                 <div className="grid grid-cols-2 gap-2">

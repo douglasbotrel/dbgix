@@ -13,6 +13,19 @@ export async function GET(request: NextRequest) {
 
     // ── GESTÃO — visão geral de todos os projetos operacionais ──
     if (ROLES_GESTAO.includes(user.role)) {
+      // Corrige projetos "presos" em etapaPipeline=EM_EXECUCAO mesmo já
+      // tendo sido dados como concluídos (statusOperacional=CONCLUIDO) —
+      // isso acontecia porque, antes desta correção, concluir a última
+      // tarefa de um projeto só avançava o statusOperacional, nunca o
+      // etapaPipeline, então o projeto continuava contando como "Em
+      // Execução" aqui no Dashboard/BI pra sempre. Roda de novo a cada
+      // carregamento, então também cobre qualquer caso antigo que já
+      // tenha ficado assim antes dessa correção existir.
+      await prisma.projeto.updateMany({
+        where: { etapaPipeline: 'EM_EXECUCAO', statusOperacional: 'CONCLUIDO' },
+        data: { etapaPipeline: 'CONCLUIDO' },
+      })
+
       const etapasAtivas: string[] = ['OPERACIONAL', 'EM_EXECUCAO']
 
       const [

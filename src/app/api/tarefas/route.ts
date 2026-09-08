@@ -196,19 +196,41 @@ export async function PATCH(request: NextRequest) {
               },
             }).catch(() => {})
           }
-          // Todas concluídas → finaliza parte operacional
+          // Todas concluídas → finaliza parte operacional. Atualiza os DOIS
+          // campos de status juntos (statusOperacional E etapaPipeline) —
+          // antes só o statusOperacional avançava pra CONCLUIDO, então o
+          // projeto ficava "preso" em etapaPipeline=EM_EXECUCAO pra sempre,
+          // e continuava contando como "Em Execução" no Dashboard/BI mesmo
+          // com todas as tarefas concluídas.
           if (totalTarefas > 0 && concluidas === totalTarefas) {
             await prisma.projeto.update({
               where: { id: proj.id },
-              data: { statusOperacional: 'CONCLUIDO' },
+              data: { statusOperacional: 'CONCLUIDO', etapaPipeline: 'CONCLUIDO' },
             })
+            if (proj.etapaPipeline !== 'CONCLUIDO') {
+              await prisma.historicoStatus.create({
+                data: {
+                  projetoId: proj.id,
+                  statusAnterior: proj.etapaPipeline,
+                  statusNovo: 'CONCLUIDO',
+                  campo: 'etapaPipeline',
+                  observacao: 'Concluído automaticamente ao concluir a última tarefa',
+                  usuarioId: user.id,
+                },
+              }).catch(() => {})
+            }
           }
         } else if (updateData.status === 'PENDENTE') {
-          // Desmarcou → se estava CONCLUIDO, volta para EM_ANDAMENTO
-          if (proj.statusOperacional === 'CONCLUIDO') {
+          // Desmarcou (reabriu uma tarefa) → se o projeto já tinha sido dado
+          // como concluído, volta pros dois campos de status pro estado "em
+          // andamento" — mesma lógica simétrica do avanço acima.
+          if (proj.statusOperacional === 'CONCLUIDO' || proj.etapaPipeline === 'CONCLUIDO') {
             await prisma.projeto.update({
               where: { id: proj.id },
-              data: { statusOperacional: 'EM_ANDAMENTO' },
+              data: {
+                statusOperacional: 'EM_ANDAMENTO',
+                ...(proj.etapaPipeline === 'CONCLUIDO' && { etapaPipeline: 'EM_EXECUCAO' }),
+              },
             })
           }
         }
