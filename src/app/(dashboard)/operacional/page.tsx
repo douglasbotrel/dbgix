@@ -303,13 +303,17 @@ export default function OperacionalPage() {
     }
   }, [quickView])
 
+  // Busca sempre a lista completa (só por etapa + busca textual) — o filtro por
+  // status é aplicado no cliente logo abaixo (projetosFiltrados). Isso evita que
+  // os contadores de cada aba ("Concluído (3)" etc.) fiquem errados: se a busca
+  // já viesse filtrada por status do servidor, os contadores das OUTRAS abas
+  // seriam calculados sobre uma lista que já não as contém.
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams()
       params.set('etapas', ETAPAS_OPERACIONAL)
-      if (filtro) params.set('statusOperacional', filtro)
-      if (search)  params.set('search', search)
+      if (search) params.set('search', search)
       const res = await fetch(`/api/projetos?${params}`)
       if (!res.ok) throw new Error()
       const data = await res.json()
@@ -319,12 +323,15 @@ export default function OperacionalPage() {
     } finally {
       setLoading(false)
     }
-  }, [filtro, search])
+  }, [search])
 
   useEffect(() => {
     const t = setTimeout(load, 300)
     return () => clearTimeout(t)
   }, [load])
+
+  // Lista efetivamente exibida (aplica o filtro de aba por status sobre a lista completa)
+  const projetosFiltrados = filtro ? projetos.filter(p => p.statusOperacional === filtro) : projetos
 
   // Carrega usuário atual e lista de usuários (para o seletor de responsável)
   useEffect(() => {
@@ -466,17 +473,19 @@ export default function OperacionalPage() {
         <div className="flex items-center justify-center h-40">
           <div className="w-8 h-8 border-4 border-green-600 border-t-transparent rounded-full animate-spin" />
         </div>
-      ) : projetos.length === 0 ? (
+      ) : projetosFiltrados.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
           <ClipboardList className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p className="font-medium">Nenhum projeto operacional encontrado</p>
+          <p className="font-medium">
+            {filtro ? 'Nenhum projeto neste status' : 'Nenhum projeto operacional encontrado'}
+          </p>
           <p className="text-sm mt-1 text-gray-400">
-            Clique em "Novo Projeto" para começar
+            {filtro ? 'Tente outra aba ou volte para "Todos"' : 'Clique em "Novo Projeto" para começar'}
           </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {projetos.map(projeto => {
+          {projetosFiltrados.map(projeto => {
             const aguardandoPlanejamento = projeto.etapaPipeline === 'OPERACIONAL'
 
             return (

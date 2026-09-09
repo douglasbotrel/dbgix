@@ -10,6 +10,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url)
     const etapaPipeline = searchParams.get('etapaPipeline')
+    const statusOperacional = searchParams.get('statusOperacional')
     const responsavelId = searchParams.get('responsavelId')
     const search = searchParams.get('search')
     const limit = parseInt(searchParams.get('limit') || '50')
@@ -21,6 +22,10 @@ export async function GET(request: NextRequest) {
     const where: any = {}
     if (etapaPipeline) where.etapaPipeline = etapaPipeline
     if (etapasParam) where.etapaPipeline = { in: etapasParam.split(',').map(e => e.trim()) }
+    // Filtro por status operacional (abas "Não Iniciado", "Em Andamento", "Concluído" etc.
+    // na tela de Operacional) — antes esse parâmetro era enviado pelo front mas nunca lido
+    // aqui, então clicar nas abas de status não mudava a lista de projetos.
+    if (statusOperacional) where.statusOperacional = statusOperacional
     if (responsavelId) where.responsavelId = responsavelId
     if (search) {
       where.OR = [
