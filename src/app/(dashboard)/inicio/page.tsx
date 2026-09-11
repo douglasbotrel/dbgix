@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
+import Link from 'next/link'
 import {
   CheckCircle2, Circle, ChevronLeft, ChevronRight, Calendar, Loader2,
-  Target, Sparkles, X,
+  Target, Sparkles, X, ArrowRight, PartyPopper,
 } from 'lucide-react'
 
 // Tela pessoal e simples: só as atividades do próprio usuário logado,
@@ -43,6 +44,10 @@ export default function InicioPage() {
   const [loading, setLoading] = useState(true)
   const [processando, setProcessando] = useState<string | null>(null)
 
+  // Lembretes/alertas dinâmicos — recalculados a cada visita (ver /api/alertas)
+  const [alertas, setAlertas] = useState<any[]>([])
+  const [loadingAlertas, setLoadingAlertas] = useState(true)
+
   const [modalJustificativa, setModalJustificativa] = useState<{
     modo: 'concluir' | 'remarcar'
     itemId: string; tarefaId: string; concluidaAtual: boolean; titulo: string
@@ -56,6 +61,23 @@ export default function InicioPage() {
       if (res.ok) {
         const data = await res.json()
         setMe(data.usuario || data)
+      }
+    })()
+  }, [])
+
+  useEffect(() => {
+    (async () => {
+      setLoadingAlertas(true)
+      try {
+        const res = await fetch('/api/alertas')
+        if (res.ok) {
+          const data = await res.json()
+          setAlertas(data.alertas || [])
+        }
+      } catch {
+        // silencioso — lembretes são um "extra", não bloqueiam a tela
+      } finally {
+        setLoadingAlertas(false)
       }
     })()
   }, [])
@@ -211,6 +233,40 @@ export default function InicioPage() {
         </h1>
         <p className="text-sm text-gray-500 mt-0.5 capitalize">{formatDataLonga(hoje)}</p>
       </div>
+
+      {/* Lembretes — recalculados a cada visita, somem sozinhos quando resolvidos */}
+      {!loadingAlertas && (
+        alertas.length > 0 ? (
+          <div className="space-y-2">
+            {alertas.map(a => (
+              <Link
+                key={a.id}
+                href={a.link}
+                className={`flex items-center justify-between gap-3 rounded-2xl border p-3.5 shadow-sm transition-colors ${
+                  a.tipo === 'aviso'
+                    ? 'bg-amber-50 border-amber-200 hover:border-amber-300'
+                    : 'bg-blue-50 border-blue-200 hover:border-blue-300'
+                }`}
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-gray-900">{a.titulo}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{a.mensagem}</p>
+                </div>
+                <span className={`text-xs font-semibold flex-shrink-0 flex items-center gap-1 ${
+                  a.tipo === 'aviso' ? 'text-amber-700' : 'text-blue-700'
+                }`}>
+                  {a.cta} <ArrowRight className="w-3.5 h-3.5" />
+                </span>
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 rounded-2xl border border-green-100 bg-green-50/60 p-3.5 text-sm text-green-700">
+            <PartyPopper className="w-4 h-4 flex-shrink-0" />
+            Tudo em dia por aqui — nenhum lembrete pendente!
+          </div>
+        )
+      )}
 
       {/* Navegação de semana */}
       <div className="flex items-center justify-between bg-white rounded-2xl border border-gray-100 p-3 shadow-sm">

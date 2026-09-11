@@ -11,10 +11,7 @@ const ROLES_GESTAO = ['ADMIN', 'GESTOR_GERAL', 'GESTOR_OPERACIONAL', 'GESTOR_ADM
 
 const DIAS_LETRA = ['S', 'T', 'Q', 'Q', 'S', 'S', 'D']
 const DIAS_NOME  = ['Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado', 'Domingo']
-const DIAS_COR   = [
-  'bg-indigo-500', 'bg-blue-500', 'bg-cyan-500', 'bg-teal-500',
-  'bg-emerald-500', 'bg-amber-500', 'bg-rose-500',
-]
+const DIAS_CURTO = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
 
 function segundaFeiraDaSemana(data: Date): Date {
   const d = new Date(data)
@@ -36,6 +33,23 @@ function formatDataCurta(d: string | Date) {
 // (início/fim da semana), essas sim sem esse problema.
 function formatPrazoCurta(d: string | Date) {
   return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' })
+}
+
+function dataDoDiaLocal(semanaInicio: Date, dia: number) {
+  const d = new Date(semanaInicio)
+  d.setDate(d.getDate() + dia)
+  return d
+}
+
+// Extrai { origem, id } de um item arrastado (pendente do backlog ou já planejado)
+function lerItemArrastado(e: React.DragEvent): { origem: 'backlog' | 'planejada'; id: string } | null {
+  try {
+    const raw = e.dataTransfer.getData('text/plain')
+    if (!raw) return null
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
 }
 
 function agruparPorProjeto(lista: any[]) {
@@ -123,18 +137,70 @@ export default function TarefasSemanaPage() {
 
   useEffect(() => { carregar() }, [carregar])
 
-  async function adicionarNaSemana(itemId: string) {
+  // dia opcional: quando informado, a tarefa já entra "encaixada" naquele dia
+  // (clique numa pílula de dia, ou arrastar direto para um bloco do calendário).
+  async function adicionarNaSemana(itemId: string, dia?: number | null) {
     setProcessando(itemId)
     try {
       const res = await fetch('/api/tarefas-semana', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemId, usuarioId, semanaInicio: semanaInicio.toISOString() }),
+        body: JSON.stringify({
+          itemId, usuarioId, semanaInicio: semanaInicio.toISOString(),
+          ...(dia !== undefined && dia !== null ? { diaSemana: dia } : {}),
+        }),
       })
       if (!res.ok) { toast.error('Erro ao adicionar'); return }
+      if (dia !== undefined && dia !== null) toast.success(`Encaixada em ${DIAS_NOME[dia]}`)
       carregar()
     } finally {
       setProcessando(null)
+    }
+  }
+
+  // Move um item já planejado direto para um dia específico (ou para "sem
+  // dia definido" com novoDia=null) — usado pelo arrastar-e-soltar do
+  // calendário. Diferente da pílula de dia (que alterna), aqui o destino é
+  // sempre exato (o bloco onde foi solto). Missão do dia continua exigindo
+  // justificativa antes de mudar de dia — mesma regra de sempre.
+  function definirDia(p: any, novoDia: number | null) {
+    if ((p.diaSemana ?? null) === novoDia) return
+    if (p.missaoDia) {
+      setTextoJustificativa('')
+      setModalJustificativa({
+        modo: 'remarcar', itemId: p.id, tarefaId: p.itemId, concluidaAtual: p.concluida, titulo: p.titulo, diaNovo: novoDia,
+      })
+      return
+    }
+    moverDiaDireto(p.id, novoDia)
+  }
+
+  async function moverDiaDireto(itemId: string, novoDia: number | null) {
+    setProcessando(itemId)
+    try {
+      const res = await fetch('/api/tarefas-semana', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: itemId, diaSemana: novoDia }),
+      })
+      if (!res.ok) { toast.error('Erro ao mover'); return }
+      carregar()
+    } finally {
+      setProcessando(null)
+    }
+  }
+
+  // Soltar (drop) num bloco de dia do calendário: pendente do backlog entra
+  // já encaixada nesse dia; item já planejado é movido pra lá.
+  function onDropDia(e: React.DragEvent, dia: number | null) {
+    e.preventDefault()
+    const item = lerItemArrastado(e)
+    if (!item) return
+    if (item.origem === 'backlog') {
+      adicionarNaSemana(item.id, dia)
+    } else {
+      const p = planejadas.find(x => x.id === item.id)
+      if (p) definirDia(p, dia)
     }
   }
 
@@ -294,11 +360,16 @@ export default function TarefasSemanaPage() {
   })()
   const ehSemanaAtual = segundaFeiraDaSemana(new Date()).getTime() === semanaInicio.getTime()
 
-  // Agrupa planejadas por dia (0-6) + "sem dia" (-1), na ordem certa
-  const gruposPorDia: { dia: number; itens: any[] }[] = [-1, 0, 1, 2, 3, 4, 5, 6].map(dia => ({
-    dia,
-    itens: planejadas.filter(p => (p.diaSemana ?? -1) === dia),
-  })).filter(g => g.itens.length > 0)
+  // Itens "sem dia definido" — mostrados numa faixa própria abaixo do calendário
+  const itensSemDia = planejadas.filter(p => p.diaSemana === null || p.diaSemana === undefined)
+
+  // Ordem dos blocos do mini-calendário: na semana atual começa por hoje
+  // (hoje, amanhã, ...) até fechar a semana; em outras semanas, sempre
+  // segunda a domingo.
+  const ordemDiasCalendario = ehSemanaAtual
+    ? Array.from({ length: 7 }, (_, i) => (hojeDiaIdx + i) % 7)
+    : [0, 1, 2, 3, 4, 5, 6]
+  const amanhaDiaIdx = (hojeDiaIdx + 1) % 7
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
@@ -306,7 +377,7 @@ export default function TarefasSemanaPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Tarefas da Semana</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Escolha o que você vai fazer, defina o dia, e marque conforme for concluindo.
+            Arraste as pendentes para o dia certo (ou clique na letrinha), e marque conforme for concluindo.
           </p>
         </div>
         {podeGerenciarEquipe && (
@@ -379,13 +450,221 @@ export default function TarefasSemanaPage() {
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-gray-300" /></div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* Backlog */}
-          <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
+          {/* Calendário da semana — blocos visuais por dia, estilo mini-calendário */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm space-y-3 order-2 lg:order-1">
+            <div className="flex items-center justify-between flex-wrap gap-1">
+              <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+                Esta semana
+                <span className="text-xs font-normal text-gray-400">({planejadas.length})</span>
+              </h2>
+              <p className="text-[11px] text-gray-400">
+                Arraste uma pendente até o dia, ou clique numa letrinha ao lado dela
+              </p>
+            </div>
+
+            {planejadas.length === 0 && (
+              <p className="text-xs text-gray-400 bg-gray-50 rounded-xl px-3 py-2">
+                Nada planejado ainda — encaixe tarefas pendentes aqui ao lado.
+              </p>
+            )}
+
+            {/* Blocos de dia — hoje/amanhã em destaque, rola horizontalmente em telas menores */}
+            <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1">
+              {ordemDiasCalendario.map(dia => {
+                const data = dataDoDiaLocal(semanaInicio, dia)
+                const itens = planejadas.filter(p => p.diaSemana === dia)
+                const ehHoje = ehSemanaAtual && dia === hojeDiaIdx
+                const ehAmanha = ehSemanaAtual && dia === amanhaDiaIdx
+                return (
+                  <div
+                    key={dia}
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={e => onDropDia(e, dia)}
+                    className={`flex-shrink-0 w-[168px] sm:w-[184px] rounded-2xl border p-2.5 flex flex-col gap-2 min-h-[180px] transition-colors ${
+                      ehHoje ? 'border-green-300 bg-green-50/50 ring-1 ring-green-200' : 'border-gray-100 bg-gray-50/60'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-gray-700">{DIAS_CURTO[dia]}</span>
+                        <span className="text-[10px] text-gray-400">{formatDataCurta(data)}</span>
+                      </div>
+                      {ehHoje ? (
+                        <span className="inline-block mt-1 text-[9px] bg-green-500 text-white font-bold px-1.5 py-0.5 rounded-full">HOJE</span>
+                      ) : ehAmanha ? (
+                        <span className="inline-block mt-1 text-[9px] bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded-full">AMANHÃ</span>
+                      ) : null}
+                    </div>
+
+                    <div className="flex-1 space-y-1.5">
+                      {itens.length === 0 ? (
+                        <p className="text-[11px] text-gray-300 text-center py-6">Solte aqui</p>
+                      ) : itens.map((p: any) => (
+                        <div
+                          key={p.id}
+                          draggable
+                          onDragStart={e => e.dataTransfer.setData('text/plain', JSON.stringify({ origem: 'planejada', id: p.id }))}
+                          className={`rounded-lg border p-2 cursor-grab active:cursor-grabbing ${
+                            p.missaoDia ? 'border-amber-200 bg-amber-50' : p.concluida ? 'border-green-100 bg-green-50' : 'border-gray-100 bg-white'
+                          }`}
+                        >
+                          <div className="flex items-start gap-1.5">
+                            <button
+                              onClick={() => clicarConcluir(p)}
+                              disabled={processando === p.itemId || processando === p.id}
+                              className="mt-0.5 flex-shrink-0 disabled:opacity-50"
+                              title={p.concluida ? 'Reabrir' : 'Marcar como concluída'}
+                            >
+                              {p.concluida
+                                ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
+                                : <Circle className="w-3.5 h-3.5 text-gray-300 hover:text-green-500" />}
+                            </button>
+                            <div className="min-w-0 flex-1">
+                              {p.missaoDia && (
+                                <span className="flex items-center gap-0.5 text-[9px] font-bold text-amber-700 mb-0.5">
+                                  <Target className="w-2.5 h-2.5" /> MISSÃO
+                                </span>
+                              )}
+                              <p className={`text-[11px] leading-snug ${p.concluida ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                                {p.titulo}
+                              </p>
+                              <p className="text-[10px] text-gray-400 truncate">{p.projeto?.codigo}</p>
+                              {p.missaoDia && p.justificativa && (
+                                <p className="text-[10px] text-amber-700 mt-1 bg-white/70 rounded px-1.5 py-1 border border-amber-100">
+                                  "{p.justificativa}"
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-end gap-2 mt-1">
+                            {(ehSemanaAtual || p.missaoDia) && (
+                              <button
+                                onClick={() => alternarMissaoDia(p)}
+                                disabled={processando === p.id || !ehSemanaAtual}
+                                className={`disabled:opacity-40 ${p.missaoDia ? 'text-amber-500 hover:text-amber-600' : 'text-gray-300 hover:text-amber-500'}`}
+                                title={
+                                  p.missaoDia
+                                    ? 'Remover missão do dia'
+                                    : ehSemanaAtual
+                                      ? 'Marcar como missão de hoje'
+                                      : 'Só é possível marcar a missão do dia na semana atual'
+                                }
+                              >
+                                <Star className={`w-3 h-3 ${p.missaoDia ? 'fill-amber-400' : ''}`} />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => removerDaSemana(p.id)}
+                              disabled={processando === p.id}
+                              className="text-gray-300 hover:text-red-500"
+                              title="Tirar da semana"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Sem dia definido — também é área de soltar (arrastar aqui tira o dia) */}
+            <div
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => onDropDia(e, null)}
+              className="rounded-2xl border border-dashed border-gray-200 p-3"
+            >
+              <p className="text-xs font-semibold text-gray-400 mb-2">Sem dia definido</p>
+              {itensSemDia.length === 0 ? (
+                <p className="text-[11px] text-gray-300 text-center py-2">Arraste aqui para tirar o dia de uma tarefa</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {itensSemDia.map((p: any) => (
+                    <div
+                      key={p.id}
+                      draggable
+                      onDragStart={e => e.dataTransfer.setData('text/plain', JSON.stringify({ origem: 'planejada', id: p.id }))}
+                      className={`rounded-xl border overflow-hidden cursor-grab active:cursor-grabbing ${
+                        p.missaoDia ? 'border-amber-200 bg-amber-50/50' : p.concluida ? 'border-green-100 bg-green-50/40' : 'border-gray-100'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2 p-2.5">
+                        <button
+                          onClick={() => clicarConcluir(p)}
+                          disabled={processando === p.itemId || processando === p.id}
+                          className="mt-0.5 flex-shrink-0 disabled:opacity-50"
+                          title={p.concluida ? 'Reabrir' : 'Marcar como concluída'}
+                        >
+                          {p.concluida
+                            ? <CheckCircle2 className="w-5 h-5 text-green-600" />
+                            : <Circle className="w-5 h-5 text-gray-300 hover:text-green-500" />}
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            {p.missaoDia && (
+                              <span className="flex items-center gap-0.5 text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                                <Target className="w-2.5 h-2.5" /> MISSÃO DO DIA
+                              </span>
+                            )}
+                            <p className={`text-sm ${p.concluida ? 'text-gray-400 line-through' : 'text-gray-800'} truncate`}>
+                              {p.titulo}
+                            </p>
+                          </div>
+                          <p className="text-xs text-gray-400 truncate">
+                            {p.projeto?.codigo} · {p.projeto?.nome || ''}
+                          </p>
+                        </div>
+                        {(ehSemanaAtual || p.missaoDia) && (
+                          <button
+                            onClick={() => alternarMissaoDia(p)}
+                            disabled={processando === p.id || !ehSemanaAtual}
+                            className={`p-1 flex-shrink-0 disabled:opacity-50 ${p.missaoDia ? 'text-amber-500 hover:text-amber-600' : 'text-gray-300 hover:text-amber-500'}`}
+                            title={p.missaoDia ? 'Remover missão do dia' : 'Marcar como missão de hoje'}
+                          >
+                            <Star className={`w-4 h-4 ${p.missaoDia ? 'fill-amber-400' : ''}`} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => removerDaSemana(p.id)}
+                          disabled={processando === p.id}
+                          className="p-1 text-gray-300 hover:text-red-500 flex-shrink-0"
+                          title="Tirar da semana"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-1 px-2.5 pb-2 pl-9">
+                        {DIAS_LETRA.map((letra, i) => (
+                          <button
+                            key={i}
+                            onClick={() => clicarDia(p, i)}
+                            disabled={processando === p.id}
+                            title={p.missaoDia ? `${DIAS_NOME[i]} (remarcar exige justificativa)` : DIAS_NOME[i]}
+                            className="w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center transition-colors disabled:opacity-50 bg-gray-100 text-gray-400 hover:bg-gray-200"
+                          >
+                            {letra}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Backlog — pendentes, à direita, prontas pra encaixar */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm order-1 lg:order-2">
+            <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-1.5">
               Minhas tarefas pendentes
               <span className="text-xs font-normal text-gray-400">({backlog.length})</span>
             </h2>
+            <p className="text-[11px] text-gray-400 mb-3">
+              Arraste até um dia, ou clique na letra do dia pra encaixar direto
+            </p>
             {backlog.length === 0 ? (
               <p className="text-sm text-gray-400 py-6 text-center">Nenhuma tarefa pendente fora da semana.</p>
             ) : (
@@ -415,29 +694,45 @@ export default function TarefasSemanaPage() {
                             return (
                               <div
                                 key={t.id}
-                                className="flex items-stretch gap-0 rounded-xl border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all overflow-hidden"
+                                draggable
+                                onDragStart={e => e.dataTransfer.setData('text/plain', JSON.stringify({ origem: 'backlog', id: t.id }))}
+                                className="rounded-xl border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all overflow-hidden cursor-grab active:cursor-grabbing"
                               >
-                                <div className={`w-1 flex-shrink-0 ${urg.barra}`} />
-                                <div className="flex items-start gap-2 p-2.5 flex-1 min-w-0">
-                                  <button
-                                    onClick={() => adicionarNaSemana(t.id)}
-                                    disabled={processando === t.id}
-                                    className="mt-0.5 p-1 rounded-md bg-green-50 text-green-600 hover:bg-green-100 flex-shrink-0 disabled:opacity-50"
-                                    title="Colocar nesta semana"
-                                  >
-                                    {processando === t.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                                  </button>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5">
+                                <div className="flex items-stretch gap-0">
+                                  <div className={`w-1 flex-shrink-0 ${urg.barra}`} />
+                                  <div className="flex items-start gap-2 p-2.5 flex-1 min-w-0">
+                                    <button
+                                      onClick={() => adicionarNaSemana(t.id)}
+                                      disabled={processando === t.id}
+                                      className="mt-0.5 p-1 rounded-md bg-green-50 text-green-600 hover:bg-green-100 flex-shrink-0 disabled:opacity-50"
+                                      title="Colocar nesta semana, sem dia definido"
+                                    >
+                                      {processando === t.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                                    </button>
+                                    <div className="min-w-0 flex-1">
                                       <p className="text-sm text-gray-800 truncate">{t.titulo}</p>
+                                      {t.prazo && (
+                                        <p className={`text-xs truncate flex items-center gap-1 ${urg.texto}`}>
+                                          {urg.texto === 'text-red-600' && <AlertTriangle className="w-3 h-3" />}
+                                          prazo {formatPrazoCurta(t.prazo)}
+                                        </p>
+                                      )}
                                     </div>
-                                    {t.prazo && (
-                                      <p className={`text-xs truncate flex items-center gap-1 ${urg.texto}`}>
-                                        {urg.texto === 'text-red-600' && <AlertTriangle className="w-3 h-3" />}
-                                        prazo {formatPrazoCurta(t.prazo)}
-                                      </p>
-                                    )}
                                   </div>
+                                </div>
+                                {/* Encaixar direto num dia — um clique já adiciona e agenda */}
+                                <div className="flex items-center gap-1 px-2.5 pb-2 pl-6">
+                                  {DIAS_LETRA.map((letra, i) => (
+                                    <button
+                                      key={i}
+                                      onClick={() => adicionarNaSemana(t.id, i)}
+                                      disabled={processando === t.id}
+                                      title={`Encaixar em ${DIAS_NOME[i]}`}
+                                      className="w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center transition-colors disabled:opacity-50 bg-gray-100 text-gray-400 hover:bg-green-100 hover:text-green-700"
+                                    >
+                                      {letra}
+                                    </button>
+                                  ))}
                                 </div>
                               </div>
                             )
@@ -447,128 +742,6 @@ export default function TarefasSemanaPage() {
                     </div>
                   )
                 })}
-              </div>
-            )}
-          </div>
-
-          {/* Esta semana — agrupado por dia, estilo Bitrix */}
-          <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
-              Planejado para esta semana
-              <span className="text-xs font-normal text-gray-400">({planejadas.length})</span>
-            </h2>
-            {planejadas.length === 0 ? (
-              <p className="text-sm text-gray-400 py-6 text-center">
-                Nada planejado ainda — adicione tarefas do lado esquerdo.
-              </p>
-            ) : (
-              <div className="space-y-4">
-                {gruposPorDia.map(grupo => (
-                  <div key={grupo.dia}>
-                    <div className="flex items-center gap-2 mb-1.5">
-                      {grupo.dia >= 0 ? (
-                        <>
-                          <span className={`w-2 h-2 rounded-full ${DIAS_COR[grupo.dia]}`} />
-                          <span className="text-xs font-semibold text-gray-600">
-                            {DIAS_NOME[grupo.dia]}
-                          </span>
-                          {ehSemanaAtual && grupo.dia === hojeDiaIdx && (
-                            <span className="text-[10px] bg-green-100 text-green-700 font-semibold px-1.5 py-0.5 rounded-full">HOJE</span>
-                          )}
-                        </>
-                      ) : (
-                        <span className="text-xs font-semibold text-gray-400">Sem dia definido</span>
-                      )}
-                    </div>
-                    <div className="space-y-1.5">
-                      {grupo.itens.map((p: any) => {
-                        return (
-                          <div
-                            key={p.id}
-                            className={`rounded-xl border overflow-hidden ${
-                              p.missaoDia ? 'border-amber-200 bg-amber-50/50' : p.concluida ? 'border-green-100 bg-green-50/40' : 'border-gray-100'
-                            }`}
-                          >
-                            <div className="flex items-start gap-2 p-2.5">
-                              <button
-                                onClick={() => clicarConcluir(p)}
-                                disabled={processando === p.itemId || processando === p.id}
-                                className="mt-0.5 flex-shrink-0 disabled:opacity-50"
-                                title={p.concluida ? 'Reabrir' : 'Marcar como concluída'}
-                              >
-                                {p.concluida
-                                  ? <CheckCircle2 className="w-5 h-5 text-green-600" />
-                                  : <Circle className="w-5 h-5 text-gray-300 hover:text-green-500" />}
-                              </button>
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5">
-                                  {p.missaoDia && (
-                                    <span className="flex items-center gap-0.5 text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                                      <Target className="w-2.5 h-2.5" /> MISSÃO DO DIA
-                                    </span>
-                                  )}
-                                  <p className={`text-sm ${p.concluida ? 'text-gray-400 line-through' : 'text-gray-800'} truncate`}>
-                                    {p.titulo}
-                                  </p>
-                                </div>
-                                <p className="text-xs text-gray-400 truncate">
-                                  {p.projeto?.codigo} · {p.projeto?.nome || ''}
-                                </p>
-                                {p.missaoDia && p.justificativa && (
-                                  <p className="text-xs text-amber-700 mt-1 bg-white/70 rounded-lg px-2 py-1 border border-amber-100">
-                                    "{p.justificativa}"
-                                  </p>
-                                )}
-                              </div>
-                              {(ehSemanaAtual || p.missaoDia) && (
-                                <button
-                                  onClick={() => alternarMissaoDia(p)}
-                                  disabled={processando === p.id || !ehSemanaAtual}
-                                  className={`p-1 flex-shrink-0 disabled:opacity-50 ${p.missaoDia ? 'text-amber-500 hover:text-amber-600' : 'text-gray-300 hover:text-amber-500'}`}
-                                  title={
-                                    p.missaoDia
-                                      ? 'Remover missão do dia'
-                                      : ehSemanaAtual
-                                        ? 'Marcar como missão de hoje'
-                                        : 'Só é possível marcar a missão do dia na semana atual'
-                                  }
-                                >
-                                  <Star className={`w-4 h-4 ${p.missaoDia ? 'fill-amber-400' : ''}`} />
-                                </button>
-                              )}
-                              <button
-                                onClick={() => removerDaSemana(p.id)}
-                                disabled={processando === p.id}
-                                className="p-1 text-gray-300 hover:text-red-500 flex-shrink-0"
-                                title="Tirar da semana"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                            {/* Pílulas de dia — Seg Ter Qua Qui Sex Sáb Dom */}
-                            <div className="flex items-center gap-1 px-2.5 pb-2 pl-9">
-                              {DIAS_LETRA.map((letra, i) => (
-                                <button
-                                  key={i}
-                                  onClick={() => clicarDia(p, i)}
-                                  disabled={processando === p.id}
-                                  title={p.missaoDia ? `${DIAS_NOME[i]} (remarcar exige justificativa)` : DIAS_NOME[i]}
-                                  className={`w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center transition-colors disabled:opacity-50 ${
-                                    p.diaSemana === i
-                                      ? `${DIAS_COR[i]} text-white`
-                                      : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                                  }`}
-                                >
-                                  {letra}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ))}
               </div>
             )}
           </div>
