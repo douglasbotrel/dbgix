@@ -20,6 +20,15 @@ interface TarefaEdit {
   responsavelId: string
 }
 
+// 0=Segunda..6=Domingo — mesmo índice usado no resto do app
+function diaIndexDeData(data: Date): number {
+  const dia = data.getDay()
+  return dia === 0 ? 6 : dia - 1
+}
+
+const DIAS_SEMANA_CURTO = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
+const DIAS_SEMANA_NOME  = ['segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado', 'domingo']
+
 // Selo de recorrência ao lado do título da tarefa:
 // - tarefa "mestre" (recorrente=true): ícone clicável, alterna pausar/retomar
 //   a geração de novas ocorrências (não afeta as já geradas).
@@ -72,6 +81,7 @@ export default function ProjetoDetalhe() {
   const [formTarefa, setFormTarefa] = useState({
     titulo: '', prazo: '', responsavelId: '', observacao: '',
     recorrente: false, recorrenciaTipo: 'SEMANAL' as 'SEMANAL' | 'MENSAL',
+    recorrenciaDiasSemana: [] as number[],
   })
   const [salvandoT, setSalvandoT]   = useState(false)
 
@@ -330,7 +340,11 @@ export default function ProjetoDetalhe() {
   async function criarTarefa() {
     if (!formTarefa.titulo.trim()) { toast.error('Título obrigatório'); return }
     if (formTarefa.recorrente && !formTarefa.prazo) {
-      toast.error('Pra tornar recorrente, defina o prazo da primeira ocorrência — o dia dela é o dia usado nas próximas')
+      toast.error('Pra tornar recorrente, defina o prazo da primeira ocorrência')
+      return
+    }
+    if (formTarefa.recorrente && formTarefa.recorrenciaTipo === 'SEMANAL' && formTarefa.recorrenciaDiasSemana.length === 0) {
+      toast.error('Selecione pelo menos um dia da semana pra recorrência semanal')
       return
     }
     setSalvandoT(true)
@@ -347,13 +361,16 @@ export default function ProjetoDetalhe() {
           ordem: (projeto?.tarefas?.length || 0) + 1,
           recorrente: formTarefa.recorrente,
           recorrenciaTipo: formTarefa.recorrente ? formTarefa.recorrenciaTipo : undefined,
+          recorrenciaDiasSemana: formTarefa.recorrente && formTarefa.recorrenciaTipo === 'SEMANAL'
+            ? formTarefa.recorrenciaDiasSemana
+            : undefined,
         }),
       })
       const data = await res.json()
       if (!res.ok) { toast.error(data.error || 'Erro ao criar tarefa'); return }
       toast.success(formTarefa.recorrente ? 'Tarefa recorrente criada!' : 'Tarefa criada')
       setNovaT(false)
-      setFormTarefa({ titulo: '', prazo: '', responsavelId: '', observacao: '', recorrente: false, recorrenciaTipo: 'SEMANAL' })
+      setFormTarefa({ titulo: '', prazo: '', responsavelId: '', observacao: '', recorrente: false, recorrenciaTipo: 'SEMANAL', recorrenciaDiasSemana: [] })
       loadProjeto({ silent: true })
     } catch { toast.error('Erro ao criar tarefa') }
     finally { setSalvandoT(false) }
@@ -637,8 +654,14 @@ export default function ProjetoDetalhe() {
             </div>
           </div>
 
-          {/* ── Toolbar: atribuição em lote ──────────────────────────── */}
-          {tarefas.length > 0 && (
+          {/* ── Toolbar: atribuição em lote ──────────────────────────────
+              Só faz sentido oferecer "aplicar a todas sem atribuição" quando
+              existe pelo menos uma tarefa realmente sem responsável/prazo —
+              ocorrências de tarefas recorrentes, por exemplo, já nascem com
+              os dois preenchidos automaticamente, então não há nada aqui pra
+              redefinir (se precisar mudar depois, dá pra editar a tarefa
+              individualmente na lista abaixo). */}
+          {totalPendentes > 0 && (
             <div className="px-4 sm:px-6 py-3 bg-gray-50 border-b border-gray-100">
               <p className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Aplicar a todas sem atribuição</p>
               <div className="flex flex-col sm:flex-row gap-2">
@@ -962,20 +985,32 @@ export default function ProjetoDetalhe() {
               </select>
             </div>
 
-            {/* Recorrência — o dia é herdado do prazo definido acima */}
+            {/* Recorrência — SEMANAL: escolha os dias; MENSAL: dia herdado do prazo acima */}
             <div className="border border-gray-200 rounded-lg p-3 bg-white">
               <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={formTarefa.recorrente}
-                  onChange={e => setFormTarefa(p => ({ ...p, recorrente: e.target.checked }))}
+                  onChange={e => {
+                    const checked = e.target.checked
+                    setFormTarefa(p => {
+                      // Ao ligar recorrência semanal sem nenhum dia ainda escolhido,
+                      // pré-seleciona o dia do prazo já definido, como ponto de partida
+                      // (o usuário pode adicionar/remover outros dias em seguida).
+                      if (checked && p.recorrenciaTipo === 'SEMANAL' && p.recorrenciaDiasSemana.length === 0 && p.prazo) {
+                        const dia = diaIndexDeData(new Date(p.prazo + 'T00:00:00'))
+                        return { ...p, recorrente: checked, recorrenciaDiasSemana: [dia] }
+                      }
+                      return { ...p, recorrente: checked }
+                    })
+                  }}
                   className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
                 />
                 <Repeat className="w-3.5 h-3.5 text-gray-400" />
                 <span className="font-medium">Tarefa recorrente</span>
               </label>
               {formTarefa.recorrente && (
-                <div className="mt-2.5 pl-6 space-y-1.5">
+                <div className="mt-2.5 pl-6 space-y-2">
                   <div className="flex items-center gap-3 text-sm">
                     <label className="flex items-center gap-1.5 cursor-pointer">
                       <input
@@ -994,10 +1029,42 @@ export default function ProjetoDetalhe() {
                       Todo mês
                     </label>
                   </div>
+
+                  {formTarefa.recorrenciaTipo === 'SEMANAL' && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {DIAS_SEMANA_CURTO.map((nome, i) => {
+                        const marcado = formTarefa.recorrenciaDiasSemana.includes(i)
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => setFormTarefa(p => ({
+                              ...p,
+                              recorrenciaDiasSemana: marcado
+                                ? p.recorrenciaDiasSemana.filter(d => d !== i)
+                                : [...p.recorrenciaDiasSemana, i].sort((a, b) => a - b),
+                            }))}
+                            className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                              marcado
+                                ? 'bg-green-600 border-green-600 text-white'
+                                : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                            }`}
+                          >
+                            {nome}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+
                   <p className="text-xs text-gray-400">
-                    {formTarefa.prazo
-                      ? `Vai se repetir toda ${new Date(formTarefa.prazo + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: formTarefa.recorrenciaTipo === 'SEMANAL' ? 'long' : undefined })}${formTarefa.recorrenciaTipo === 'MENSAL' ? ` (todo dia ${new Date(formTarefa.prazo + 'T00:00:00').getDate()})` : ''}, automaticamente.`
-                      : 'Defina o prazo acima — o dia dessa primeira tarefa é o dia usado nas próximas.'}
+                    {formTarefa.recorrenciaTipo === 'SEMANAL'
+                      ? (formTarefa.recorrenciaDiasSemana.length > 0
+                          ? `Vai se repetir toda(s) ${formTarefa.recorrenciaDiasSemana.map(d => DIAS_SEMANA_NOME[d]).join(', ')}, automaticamente.`
+                          : 'Escolha um ou mais dias da semana acima.')
+                      : (formTarefa.prazo
+                          ? `Vai se repetir todo mês no dia ${new Date(formTarefa.prazo + 'T00:00:00').getDate()}, automaticamente.`
+                          : 'Defina o prazo acima — o dia do mês dessa primeira tarefa é o dia usado nas próximas.')}
                   </p>
                 </div>
               )}
@@ -1015,7 +1082,7 @@ export default function ProjetoDetalhe() {
                 className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors">
                 {salvandoT && <Loader2 className="w-3 h-3 animate-spin" />} Salvar
               </button>
-              <button onClick={() => { setNovaT(false); setFormTarefa({ titulo: '', prazo: '', responsavelId: '', observacao: '', recorrente: false, recorrenciaTipo: 'SEMANAL' }) }}
+              <button onClick={() => { setNovaT(false); setFormTarefa({ titulo: '', prazo: '', responsavelId: '', observacao: '', recorrente: false, recorrenciaTipo: 'SEMANAL', recorrenciaDiasSemana: [] }) }}
                 className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
                 Cancelar
               </button>

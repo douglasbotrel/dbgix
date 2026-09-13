@@ -3,12 +3,6 @@ import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/auth'
 import { ROLES_RESTRITOS_AO_PROPRIO } from '@/lib/utils'
 
-// 0=Segunda..6=Domingo — mesmo índice usado em diaSemana/DIAS_NOME no resto do app
-function diaIndexDeData(data: Date): number {
-  const dia = data.getDay()
-  return dia === 0 ? 6 : dia - 1
-}
-
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser()
@@ -53,25 +47,35 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const {
       projetoId, titulo, descricao, observacao, tipo, responsavelId, prazo, ordem, etapa, obrigatorio,
-      recorrente, recorrenciaTipo,
+      recorrente, recorrenciaTipo, recorrenciaDiasSemana,
     } = body
 
     if (!projetoId || !titulo) {
       return NextResponse.json({ error: 'Projeto e título são obrigatórios' }, { status: 400 })
     }
 
-    // ── Recorrência: precisa de um prazo pra saber o dia da semana/mês ─────
-    // (o dia é herdado do prazo da primeira ocorrência — não precisa escolher
-    // o dia separadamente).
+    // ── Recorrência ──────────────────────────────────────────────────────
+    // SEMANAL: o(s) dia(s) da semana vêm explicitamente do formulário (pode
+    // ser mais de um). MENSAL: o dia do mês continua herdado do prazo da
+    // primeira ocorrência, já que não faz sentido escolher "vários dias do
+    // mês" da mesma forma.
     if (recorrente) {
       if (!prazo) {
         return NextResponse.json(
-          { error: 'Pra tornar uma tarefa recorrente, defina o prazo da primeira ocorrência — o dia dela é o dia usado nas próximas.' },
+          { error: 'Pra tornar uma tarefa recorrente, defina o prazo da primeira ocorrência.' },
           { status: 400 }
         )
       }
       if (recorrenciaTipo !== 'SEMANAL' && recorrenciaTipo !== 'MENSAL') {
         return NextResponse.json({ error: 'Escolha se a recorrência é semanal ou mensal' }, { status: 400 })
+      }
+      if (recorrenciaTipo === 'SEMANAL') {
+        if (!Array.isArray(recorrenciaDiasSemana) || recorrenciaDiasSemana.length === 0) {
+          return NextResponse.json({ error: 'Selecione pelo menos um dia da semana pra recorrência semanal' }, { status: 400 })
+        }
+        if (recorrenciaDiasSemana.some((d: unknown) => typeof d !== 'number' || d < 0 || d > 6 || !Number.isInteger(d))) {
+          return NextResponse.json({ error: 'Dia da semana inválido' }, { status: 400 })
+        }
       }
     }
 
@@ -104,13 +108,15 @@ export async function POST(request: NextRequest) {
 
     const dataPrazoTarefa = prazo ? new Date(prazo) : null
 
-    // O dia usado nas próximas ocorrências é derivado do prazo desta
-    // primeira — dia da semana pra SEMANAL, dia do mês pra MENSAL.
+    // SEMANAL usa os dias escolhidos no formulário; MENSAL continua herdando
+    // o dia do mês a partir do prazo desta primeira ocorrência.
     const camposRecorrencia = recorrente && dataPrazoTarefa
       ? {
           recorrente: true,
           recorrenciaTipo,
-          recorrenciaDiaSemana: recorrenciaTipo === 'SEMANAL' ? diaIndexDeData(dataPrazoTarefa) : null,
+          recorrenciaDiasSemana: recorrenciaTipo === 'SEMANAL'
+            ? Array.from(new Set(recorrenciaDiasSemana as number[])).sort((a: number, b: number) => a - b)
+            : [],
           recorrenciaDiaMes: recorrenciaTipo === 'MENSAL' ? dataPrazoTarefa.getDate() : null,
         }
       : {}

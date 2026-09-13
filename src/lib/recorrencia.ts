@@ -33,13 +33,18 @@ function diaIndexDeData(data: Date): number {
   return dia === 0 ? 6 : dia - 1
 }
 
-// Primeira data estritamente depois de `base` cujo dia da semana é `diaSemana`
-function proximaDataSemanal(base: Date, diaSemana: number): Date {
+// Primeira data estritamente depois de `base` cujo dia da semana está em
+// `diasSemana` (um ou mais dias, ex: [0, 2, 4] = Seg/Qua/Sex). Limita a busca
+// a 8 dias — o suficiente pra sempre achar um dia válido — pra nunca travar
+// em loop infinito caso a lista venha vazia por algum motivo.
+function proximaDataSemanal(base: Date, diasSemana: number[]): Date {
+  const dias = diasSemana.length > 0 ? diasSemana : [diaIndexDeData(base)]
   const d = new Date(base)
   d.setHours(0, 0, 0, 0)
-  do {
+  for (let i = 0; i < 8; i++) {
     d.setDate(d.getDate() + 1)
-  } while (diaIndexDeData(d) !== diaSemana)
+    if (dias.includes(diaIndexDeData(d))) return d
+  }
   return d
 }
 
@@ -70,7 +75,7 @@ export async function gerarProximasOcorrencias(filtroExtra: Record<string, unkno
       select: {
         id: true, projetoId: true, titulo: true, descricao: true, tipo: true,
         responsavelId: true, ordem: true, etapa: true, obrigatorio: true,
-        recorrenciaTipo: true, recorrenciaDiaSemana: true, recorrenciaDiaMes: true,
+        recorrenciaTipo: true, recorrenciaDiasSemana: true, recorrenciaDiaMes: true,
         prazo: true,
       },
     })
@@ -104,7 +109,7 @@ export async function gerarProximasOcorrencias(filtroExtra: Record<string, unkno
       while (faltam > 0) {
         cursor = master.recorrenciaTipo === 'MENSAL'
           ? proximaDataMensal(cursor, master.recorrenciaDiaMes || 1)
-          : proximaDataSemanal(cursor, master.recorrenciaDiaSemana ?? 0)
+          : proximaDataSemanal(cursor, master.recorrenciaDiasSemana ?? [])
 
         await (prisma.tarefa as any).create({
           data: {
