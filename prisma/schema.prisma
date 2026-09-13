@@ -111,11 +111,34 @@ model Tarefa {
   criadoEm     DateTime @default(now())
   atualizadoEm DateTime @updatedAt
 
+  // ── Recorrência ──────────────────────────────────────────────────
+  // Uma tarefa "mestre" (recorrente=true, recorrenciaOrigemId=null) é uma
+  // atividade normal (com sua própria data/responsável/status) que também
+  // serve de modelo: o sistema gera automaticamente as próximas ocorrências
+  // como novas Tarefas (recorrenciaOrigemId apontando pra ela), sempre
+  // mantendo algumas ocorrências futuras já criadas — sem precisar recriar
+  // manualmente toda semana/mês. O dia é herdado do prazo da mestre (dia da
+  // semana pro tipo SEMANAL, dia do mês pro tipo MENSAL). Cada ocorrência
+  // gerada é uma tarefa independente (pode ter responsável/status próprios),
+  // preservando o histórico de cada execução para a análise de performance.
+  recorrente           Boolean  @default(false)
+  recorrenciaTipo      String?  // SEMANAL | MENSAL
+  recorrenciaDiaSemana Int?     // 0=Segunda..6=Domingo — usado quando SEMANAL
+  recorrenciaDiaMes    Int?     // 1..31 — usado quando MENSAL (mês sem esse dia usa o último dia do mês)
+  recorrenciaAtiva     Boolean  @default(true) // false = para de gerar novas ocorrências (histórico é preservado)
+  recorrenciaOrigemId  String?
+
   projeto     Projeto   @relation(fields: [projetoId], references: [id])
   responsavel Usuario?  @relation("TarefaResponsavel", fields: [responsavelId], references: [id])
   documentos  Documento[]
   planejamentosSemana TarefaSemana[]
+  origemRecorrencia     Tarefa?  @relation("RecorrenciaInstancias", fields: [recorrenciaOrigemId], references: [id])
+  instanciasRecorrencia Tarefa[] @relation("RecorrenciaInstancias")
 
+  // Evita gerar duas ocorrências da mesma recorrência na mesma data (NULLs
+  // não conflitam entre si no Postgres, então tarefas não-recorrentes — a
+  // grande maioria — não são afetadas por essa restrição).
+  @@unique([recorrenciaOrigemId, prazo])
   @@map("tarefas")
 }
 

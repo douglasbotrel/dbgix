@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/auth'
+import { gerarProximasOcorrencias } from '@/lib/recorrencia'
 
 // Quem pode ver/planejar a semana de OUTRO usuário (além da própria)
 const PODE_VER_OUTROS = ['ADMIN', 'GESTOR_GERAL', 'GESTOR_OPERACIONAL', 'GESTOR_ADMINISTRATIVO', 'SUPERVISOR']
@@ -52,6 +53,12 @@ export async function GET(request: NextRequest) {
     const semanaInicio = segundaFeiraDaSemana(semanaParam ? new Date(semanaParam) : new Date())
     const semanaFimExclusiva = new Date(semanaInicio)
     semanaFimExclusiva.setDate(semanaFimExclusiva.getDate() + 7)
+
+    // Garante que as próximas ocorrências das tarefas recorrentes desse
+    // usuário já estão geradas antes de montar backlog/planejadas abaixo —
+    // mesmo princípio do auto-planejamento logo adiante: se auto-cura a cada
+    // carregamento da tela.
+    await gerarProximasOcorrencias({ responsavelId: usuarioId })
 
     const includePlanejadas = {
       tarefa: {

@@ -3,6 +3,12 @@ import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/auth'
 import { ROLES_RESTRITOS_AO_PROPRIO } from '@/lib/utils'
 
+// 0=Segunda..6=Domingo — mesmo índice usado em diaSemana/DIAS_NOME no resto do app
+function diaIndexDeData(data: Date): number {
+  const dia = data.getDay()
+  return dia === 0 ? 6 : dia - 1
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser()
@@ -45,10 +51,28 @@ export async function POST(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
 
     const body = await request.json()
-    const { projetoId, titulo, descricao, observacao, tipo, responsavelId, prazo, ordem, etapa, obrigatorio } = body
+    const {
+      projetoId, titulo, descricao, observacao, tipo, responsavelId, prazo, ordem, etapa, obrigatorio,
+      recorrente, recorrenciaTipo,
+    } = body
 
     if (!projetoId || !titulo) {
       return NextResponse.json({ error: 'Projeto e título são obrigatórios' }, { status: 400 })
+    }
+
+    // ── Recorrência: precisa de um prazo pra saber o dia da semana/mês ─────
+    // (o dia é herdado do prazo da primeira ocorrência — não precisa escolher
+    // o dia separadamente).
+    if (recorrente) {
+      if (!prazo) {
+        return NextResponse.json(
+          { error: 'Pra tornar uma tarefa recorrente, defina o prazo da primeira ocorrência — o dia dela é o dia usado nas próximas.' },
+          { status: 400 }
+        )
+      }
+      if (recorrenciaTipo !== 'SEMANAL' && recorrenciaTipo !== 'MENSAL') {
+        return NextResponse.json({ error: 'Escolha se a recorrência é semanal ou mensal' }, { status: 400 })
+      }
     }
 
     // Perfis operacionais individuais só podem criar tarefas/subtarefas dentro
@@ -78,18 +102,32 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const dataPrazoTarefa = prazo ? new Date(prazo) : null
+
+    // O dia usado nas próximas ocorrências é derivado do prazo desta
+    // primeira — dia da semana pra SEMANAL, dia do mês pra MENSAL.
+    const camposRecorrencia = recorrente && dataPrazoTarefa
+      ? {
+          recorrente: true,
+          recorrenciaTipo,
+          recorrenciaDiaSemana: recorrenciaTipo === 'SEMANAL' ? diaIndexDeData(dataPrazoTarefa) : null,
+          recorrenciaDiaMes: recorrenciaTipo === 'MENSAL' ? dataPrazoTarefa.getDate() : null,
+        }
+      : {}
+
     const tarefa = await prisma.tarefa.create({
       data: {
         projetoId, titulo, descricao,
         observacao: observacao || null,
         tipo: tipo || 'TAREFA',
         responsavelId: responsavelId || null,
-        prazo: prazo ? new Date(prazo) : null,
+        prazo: dataPrazoTarefa,
         ordem: ordem || 0,
         etapa,
         obrigatorio: obrigatorio || false,
         status: 'PENDENTE',
-      },
+        ...camposRecorrencia,
+      } as any,
       include: { responsavel: { select: { id: true, nome: true } } }
     })
 
@@ -105,7 +143,7 @@ export async function PATCH(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
 
     const body = await request.json()
-    const { id, status, responsavelId, prazo, descricao, observacao } = body
+    const { id, status, responsavelId, prazo, descricao, observacao, recorrenciaAtiva } = body
 
     if (!id) return NextResponse.json({ error: 'ID da tarefa é obrigatório' }, { status: 400 })
 
@@ -134,6 +172,10 @@ export async function PATCH(request: NextRequest) {
       ...(descricao        !== undefined && { descricao }),
       ...(observacao       !== undefined && { observacao: observacao || null }),
       ...(status === 'CONCLUIDA'         && { dataConclusao: new Date() }),
+      // Liga/desliga a geração de novas ocorrências — só faz sentido na
+      // tarefa "mestre" (a rota de geração já ignora quem não é mestre, mas
+      // aceitar aqui em qualquer tarefa recorrente é inofensivo).
+      ...(recorrenciaAtiva !== undefined && { recorrenciaAtiva: !!recorrenciaAtiva }),
     }
 
     if (prazo !== undefined) {

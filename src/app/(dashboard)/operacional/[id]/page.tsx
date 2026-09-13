@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import {
   ArrowLeft, Plus, Check, FileText,
   User, Calendar, Loader2,
-  Edit2, Save, Clock, AlertCircle, MessageSquare, Trash2,
+  Edit2, Save, Clock, AlertCircle, MessageSquare, Trash2, Repeat,
 } from 'lucide-react'
 import {
   formatDate,
@@ -18,6 +18,40 @@ import NoteEditor from './NoteEditor'
 interface TarefaEdit {
   prazo: string
   responsavelId: string
+}
+
+// Selo de recorrência ao lado do título da tarefa:
+// - tarefa "mestre" (recorrente=true): ícone clicável, alterna pausar/retomar
+//   a geração de novas ocorrências (não afeta as já geradas).
+// - ocorrência gerada automaticamente (recorrenciaOrigemId setado): ícone
+//   apenas informativo, sem clique.
+function BadgeRecorrencia({ tarefa, onToggle }: { tarefa: any; onToggle: (tarefa: any) => void }) {
+  if (!tarefa.recorrente && !tarefa.recorrenciaOrigemId) return null
+
+  if (tarefa.recorrente) {
+    const ativa = tarefa.recorrenciaAtiva !== false
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onToggle(tarefa) }}
+        title={ativa ? 'Recorrência ativa — clique para pausar novas ocorrências' : 'Recorrência pausada — clique para retomar'}
+        className={`inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full align-[-2px] transition-colors ${
+          ativa ? 'text-blue-600 hover:text-blue-800' : 'text-gray-300 hover:text-gray-500'
+        }`}
+      >
+        <Repeat className="w-3.5 h-3.5" />
+      </button>
+    )
+  }
+
+  return (
+    <span
+      title="Gerada automaticamente por recorrência"
+      className="inline-flex items-center justify-center w-4 h-4 mr-1.5 text-gray-300 align-[-2px]"
+    >
+      <Repeat className="w-3.5 h-3.5" />
+    </span>
+  )
 }
 
 export default function ProjetoDetalhe() {
@@ -35,7 +69,10 @@ export default function ProjetoDetalhe() {
   const [salvandoId, setSalvandoId] = useState<string | null>(null)
   // Nova tarefa avulsa
   const [novaT, setNovaT]           = useState(false)
-  const [formTarefa, setFormTarefa] = useState({ titulo: '', prazo: '', responsavelId: '', observacao: '' })
+  const [formTarefa, setFormTarefa] = useState({
+    titulo: '', prazo: '', responsavelId: '', observacao: '',
+    recorrente: false, recorrenciaTipo: 'SEMANAL' as 'SEMANAL' | 'MENSAL',
+  })
   const [salvandoT, setSalvandoT]   = useState(false)
 
   // Usuário logado (para controle de permissões)
@@ -292,6 +329,10 @@ export default function ProjetoDetalhe() {
   // ── Nova tarefa avulsa ─────────────────────────────────────
   async function criarTarefa() {
     if (!formTarefa.titulo.trim()) { toast.error('Título obrigatório'); return }
+    if (formTarefa.recorrente && !formTarefa.prazo) {
+      toast.error('Pra tornar recorrente, defina o prazo da primeira ocorrência — o dia dela é o dia usado nas próximas')
+      return
+    }
     setSalvandoT(true)
     try {
       const res = await fetch('/api/tarefas', {
@@ -304,16 +345,34 @@ export default function ProjetoDetalhe() {
           responsavelId: formTarefa.responsavelId || null,
           observacao: formTarefa.observacao || null,
           ordem: (projeto?.tarefas?.length || 0) + 1,
+          recorrente: formTarefa.recorrente,
+          recorrenciaTipo: formTarefa.recorrente ? formTarefa.recorrenciaTipo : undefined,
         }),
       })
       const data = await res.json()
       if (!res.ok) { toast.error(data.error || 'Erro ao criar tarefa'); return }
-      toast.success('Tarefa criada')
+      toast.success(formTarefa.recorrente ? 'Tarefa recorrente criada!' : 'Tarefa criada')
       setNovaT(false)
-      setFormTarefa({ titulo: '', prazo: '', responsavelId: '', observacao: '' })
+      setFormTarefa({ titulo: '', prazo: '', responsavelId: '', observacao: '', recorrente: false, recorrenciaTipo: 'SEMANAL' })
       loadProjeto({ silent: true })
     } catch { toast.error('Erro ao criar tarefa') }
     finally { setSalvandoT(false) }
+  }
+
+  // Liga/desliga a geração de novas ocorrências de uma tarefa recorrente
+  // "mestre" — o histórico (já gerado) nunca é apagado, só para de criar as
+  // próximas.
+  async function alternarRecorrencia(tarefa: any) {
+    try {
+      const res = await fetch('/api/tarefas', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tarefa.id, recorrenciaAtiva: !tarefa.recorrenciaAtiva }),
+      })
+      if (!res.ok) { toast.error('Erro ao atualizar recorrência'); return }
+      toast.success(tarefa.recorrenciaAtiva ? 'Recorrência pausada' : 'Recorrência reativada')
+      loadProjeto({ silent: true })
+    } catch { toast.error('Erro ao atualizar recorrência') }
   }
 
   // ── Avançar manualmente de OPERACIONAL para EM_EXECUCAO ──────
@@ -902,6 +961,48 @@ export default function ProjetoDetalhe() {
                 ))}
               </select>
             </div>
+
+            {/* Recorrência — o dia é herdado do prazo definido acima */}
+            <div className="border border-gray-200 rounded-lg p-3 bg-white">
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formTarefa.recorrente}
+                  onChange={e => setFormTarefa(p => ({ ...p, recorrente: e.target.checked }))}
+                  className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                />
+                <Repeat className="w-3.5 h-3.5 text-gray-400" />
+                <span className="font-medium">Tarefa recorrente</span>
+              </label>
+              {formTarefa.recorrente && (
+                <div className="mt-2.5 pl-6 space-y-1.5">
+                  <div className="flex items-center gap-3 text-sm">
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="radio"
+                        checked={formTarefa.recorrenciaTipo === 'SEMANAL'}
+                        onChange={() => setFormTarefa(p => ({ ...p, recorrenciaTipo: 'SEMANAL' }))}
+                      />
+                      Toda semana
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="radio"
+                        checked={formTarefa.recorrenciaTipo === 'MENSAL'}
+                        onChange={() => setFormTarefa(p => ({ ...p, recorrenciaTipo: 'MENSAL' }))}
+                      />
+                      Todo mês
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-400">
+                    {formTarefa.prazo
+                      ? `Vai se repetir toda ${new Date(formTarefa.prazo + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: formTarefa.recorrenciaTipo === 'SEMANAL' ? 'long' : undefined })}${formTarefa.recorrenciaTipo === 'MENSAL' ? ` (todo dia ${new Date(formTarefa.prazo + 'T00:00:00').getDate()})` : ''}, automaticamente.`
+                      : 'Defina o prazo acima — o dia dessa primeira tarefa é o dia usado nas próximas.'}
+                  </p>
+                </div>
+              )}
+            </div>
+
             <textarea
               value={formTarefa.observacao}
               onChange={e => setFormTarefa(p => ({ ...p, observacao: e.target.value }))}
@@ -914,7 +1015,7 @@ export default function ProjetoDetalhe() {
                 className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors">
                 {salvandoT && <Loader2 className="w-3 h-3 animate-spin" />} Salvar
               </button>
-              <button onClick={() => { setNovaT(false); setFormTarefa({ titulo: '', prazo: '', responsavelId: '', observacao: '' }) }}
+              <button onClick={() => { setNovaT(false); setFormTarefa({ titulo: '', prazo: '', responsavelId: '', observacao: '', recorrente: false, recorrenciaTipo: 'SEMANAL' }) }}
                 className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
                 Cancelar
               </button>
@@ -972,6 +1073,7 @@ export default function ProjetoDetalhe() {
                         </button>
                         <div className="flex-1 min-w-0">
                           <p className={`text-sm font-medium ${tarefa.status === 'CONCLUIDA' ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                            <BadgeRecorrencia tarefa={tarefa} onToggle={alternarRecorrencia} />
                             {tarefa.titulo}
                           </p>
                           <div className="flex items-center gap-3 mt-0.5 flex-wrap">
@@ -1076,6 +1178,7 @@ export default function ProjetoDetalhe() {
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-gray-900 font-medium leading-snug">
+                        <BadgeRecorrencia tarefa={tarefa} onToggle={alternarRecorrencia} />
                         {tarefa.titulo}
                       </p>
                       <div className="flex gap-2 text-xs text-gray-400 mt-0.5 flex-wrap">
@@ -1115,6 +1218,7 @@ export default function ProjetoDetalhe() {
                           </button>
                           <div className="flex-1 min-w-0">
                             <p className="text-sm text-gray-400 line-through leading-snug">
+                              <BadgeRecorrencia tarefa={tarefa} onToggle={alternarRecorrencia} />
                               {tarefa.titulo}
                             </p>
                             <div className="flex gap-2 text-xs text-gray-400 mt-0.5 flex-wrap">

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/auth'
 import { ROLES_RESTRITOS_AO_PROPRIO } from '@/lib/utils'
+import { gerarProximasOcorrencias } from '@/lib/recorrencia'
 
 // Qual etapa vem depois de cada etapa ao "salvar/confirmar"
 const PROXIMA_ETAPA: Record<string, string> = {
@@ -32,6 +33,10 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   try {
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
+
+    // Garante que as próximas ocorrências das tarefas recorrentes deste
+    // projeto já estão geradas antes de montar a resposta abaixo.
+    await gerarProximasOcorrencias({ projetoId: params.id })
 
     const projeto = await prisma.projeto.findUnique({
       where: { id: params.id },
