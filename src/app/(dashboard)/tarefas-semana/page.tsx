@@ -363,13 +363,16 @@ export default function TarefasSemanaPage() {
   // Itens "sem dia definido" — mostrados numa faixa própria abaixo do calendário
   const itensSemDia = planejadas.filter(p => p.diaSemana === null || p.diaSemana === undefined)
 
-  // Ordem dos blocos do mini-calendário: na semana atual começa por hoje
-  // (hoje, amanhã, ...) até fechar a semana; em outras semanas, sempre
-  // segunda a domingo.
-  const ordemDiasCalendario = ehSemanaAtual
-    ? Array.from({ length: 7 }, (_, i) => (hojeDiaIdx + i) % 7)
-    : [0, 1, 2, 3, 4, 5, 6]
-  const amanhaDiaIdx = (hojeDiaIdx + 1) % 7
+  // Ordem dos blocos do mini-calendário: SEMPRE segunda a domingo, na
+  // sequência cronológica normal do calendário — nunca "começando por hoje",
+  // porque isso fazia as datas aparecerem fora de ordem na tela (ex: domingo
+  // primeiro, depois segunda de uma semana atrás). HOJE/AMANHÃ continuam
+  // destacados visualmente onde quer que caiam na semana.
+  const ordemDiasCalendario = [0, 1, 2, 3, 4, 5, 6]
+  // "Amanhã" só existe dentro da semana exibida quando hoje não é domingo —
+  // se hoje é domingo (último dia da semana Seg-Dom), amanhã já é segunda da
+  // PRÓXIMA semana, que não aparece nesta tela, então nenhum bloco é marcado.
+  const amanhaDiaIdx = hojeDiaIdx === 6 ? -1 : hojeDiaIdx + 1
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
@@ -459,7 +462,7 @@ export default function TarefasSemanaPage() {
                 <span className="text-xs font-normal text-gray-400">({planejadas.length})</span>
               </h2>
               <p className="text-[11px] text-gray-400">
-                Arraste uma pendente até o dia, ou clique numa letrinha ao lado dela
+                Arraste uma pendente até o dia, ou clique na letra do dia da semana abaixo da tarefa no quadro ao lado
               </p>
             </div>
 
@@ -469,8 +472,10 @@ export default function TarefasSemanaPage() {
               </p>
             )}
 
-            {/* Blocos de dia — hoje/amanhã em destaque, rola horizontalmente em telas menores */}
-            <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1">
+            {/* Blocos de dia, sempre Segunda→Domingo — a grade "quebra linha" em telas
+                menores em vez de exigir rolar pro lado, e cada dia tem sua própria
+                rolagem interna quando tem muita tarefa, pra não esticar a página inteira. */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-2.5">
               {ordemDiasCalendario.map(dia => {
                 const data = dataDoDiaLocal(semanaInicio, dia)
                 const itens = planejadas.filter(p => p.diaSemana === dia)
@@ -481,7 +486,7 @@ export default function TarefasSemanaPage() {
                     key={dia}
                     onDragOver={e => e.preventDefault()}
                     onDrop={e => onDropDia(e, dia)}
-                    className={`flex-shrink-0 w-[168px] sm:w-[184px] rounded-2xl border p-2.5 flex flex-col gap-2 min-h-[180px] transition-colors ${
+                    className={`rounded-2xl border p-2.5 flex flex-col gap-2 min-h-[120px] transition-colors ${
                       ehHoje ? 'border-green-300 bg-green-50/50 ring-1 ring-green-200' : 'border-gray-100 bg-gray-50/60'
                     }`}
                   >
@@ -497,7 +502,7 @@ export default function TarefasSemanaPage() {
                       ) : null}
                     </div>
 
-                    <div className="flex-1 space-y-1.5">
+                    <div className="flex-1 space-y-1.5 max-h-64 overflow-y-auto pr-0.5">
                       {itens.length === 0 ? (
                         <p className="text-[11px] text-gray-300 text-center py-6">Solte aqui</p>
                       ) : itens.map((p: any) => (
