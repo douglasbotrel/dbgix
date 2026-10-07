@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 import {
   Plus, X, CheckCircle2, Circle, ChevronLeft, ChevronRight, ChevronDown,
@@ -72,6 +72,138 @@ function corUrgencia(prazo: string | null | undefined): { barra: string; texto: 
   return { barra: 'bg-emerald-400', texto: 'text-gray-400' }
 }
 
+// Um bloco de dia do mini-calendário — usado tanto na faixa compacta
+// Ontem/Hoje/Amanhã quanto na grade completa (semanas que não são a atual).
+// `tamanho="grande"` é só o "Hoje" em destaque, com mais espaço pra lista.
+function BlocoDia({
+  blocoRef, dia, data, itens, rotulo, destaque, tamanho = 'normal',
+  onDropDia, processando, ehSemanaAtual,
+  clicarConcluir, alternarMissaoDia, removerDaSemana,
+}: {
+  blocoRef?: React.RefObject<HTMLDivElement>
+  dia: number
+  data: Date
+  itens: any[]
+  rotulo: string
+  destaque?: 'hoje' | 'amanha' | null
+  tamanho?: 'normal' | 'grande'
+  onDropDia: (e: React.DragEvent, dia: number | null) => void
+  processando: string | null
+  ehSemanaAtual: boolean
+  clicarConcluir: (p: any) => void
+  alternarMissaoDia: (p: any) => void
+  removerDaSemana: (id: string) => void
+}) {
+  return (
+    <div
+      ref={blocoRef}
+      onDragOver={e => e.preventDefault()}
+      onDrop={e => onDropDia(e, dia)}
+      className={`rounded-2xl border p-2.5 flex flex-col gap-2 transition-colors ${
+        tamanho === 'grande' ? 'min-h-[200px]' : 'min-h-[120px]'
+      } ${destaque === 'hoje' ? 'border-green-300 bg-green-50/50 ring-1 ring-green-200' : 'border-gray-100 bg-gray-50/60'}`}
+    >
+      <div>
+        <div className="flex items-center justify-between">
+          <span className={`font-bold text-gray-700 ${tamanho === 'grande' ? 'text-sm' : 'text-xs'}`}>{rotulo}</span>
+          <span className="text-[10px] text-gray-400">{formatDataCurta(data)}</span>
+        </div>
+        {destaque === 'hoje' ? (
+          <span className="inline-block mt-1 text-[9px] bg-green-500 text-white font-bold px-1.5 py-0.5 rounded-full">HOJE</span>
+        ) : destaque === 'amanha' ? (
+          <span className="inline-block mt-1 text-[9px] bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded-full">AMANHÃ</span>
+        ) : null}
+      </div>
+
+      <div className={`flex-1 space-y-1.5 overflow-y-auto pr-0.5 ${tamanho === 'grande' ? 'max-h-96' : 'max-h-64'}`}>
+        {itens.length === 0 ? (
+          <p className="text-[11px] text-gray-300 text-center py-6">Solte aqui</p>
+        ) : itens.map((p: any) => (
+          <div
+            key={p.id}
+            draggable
+            onDragStart={e => e.dataTransfer.setData('text/plain', JSON.stringify({ origem: 'planejada', id: p.id }))}
+            className={`rounded-lg border p-2 cursor-grab active:cursor-grabbing ${
+              p.missaoDia ? 'border-amber-200 bg-amber-50' : p.concluida ? 'border-green-100 bg-green-50' : 'border-gray-100 bg-white'
+            }`}
+          >
+            <div className="flex items-start gap-1.5">
+              <button
+                onClick={() => clicarConcluir(p)}
+                disabled={processando === p.itemId || processando === p.id}
+                className="mt-0.5 flex-shrink-0 disabled:opacity-50"
+                title={p.concluida ? 'Reabrir' : 'Marcar como concluída'}
+              >
+                {p.concluida
+                  ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
+                  : <Circle className="w-3.5 h-3.5 text-gray-300 hover:text-green-500" />}
+              </button>
+              <div className="min-w-0 flex-1">
+                {p.missaoDia && (
+                  <span className="flex items-center gap-0.5 text-[9px] font-bold text-amber-700 mb-0.5">
+                    <Target className="w-2.5 h-2.5" /> MISSÃO
+                  </span>
+                )}
+                <p className={`text-[11px] leading-snug ${p.concluida ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                  {p.titulo}
+                </p>
+                <p className="text-[10px] text-gray-400 truncate">{p.projeto?.codigo}</p>
+                {p.missaoDia && p.justificativa && (
+                  <p className="text-[10px] text-amber-700 mt-1 bg-white/70 rounded px-1.5 py-1 border border-amber-100">
+                    "{p.justificativa}"
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 mt-1">
+              {(ehSemanaAtual || p.missaoDia) && (
+                <button
+                  onClick={() => alternarMissaoDia(p)}
+                  disabled={processando === p.id || !ehSemanaAtual}
+                  className={`disabled:opacity-40 ${p.missaoDia ? 'text-amber-500 hover:text-amber-600' : 'text-gray-300 hover:text-amber-500'}`}
+                  title={
+                    p.missaoDia
+                      ? 'Remover missão do dia'
+                      : ehSemanaAtual
+                        ? 'Marcar como missão de hoje'
+                        : 'Só é possível marcar a missão do dia na semana atual'
+                  }
+                >
+                  <Star className={`w-3 h-3 ${p.missaoDia ? 'fill-amber-400' : ''}`} />
+                </button>
+              )}
+              <button
+                onClick={() => removerDaSemana(p.id)}
+                disabled={processando === p.id}
+                className="text-gray-300 hover:text-red-500"
+                title="Tirar da semana"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Placeholder pro bloco "Ontem"/"Amanhã" quando esse dia cai fora da semana
+// carregada (ex: hoje é segunda, então "ontem" é domingo da semana anterior)
+// — em vez de tentar mostrar dados que não foram buscados, oferece um atalho
+// direto pra navegar até a semana certa.
+function BlocoForaDaSemana({ rotulo, texto, aoNavegar }: { rotulo: string; texto: string; aoNavegar: () => void }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-gray-200 p-3 flex flex-col items-center justify-center text-center gap-1.5 min-h-[120px]">
+      <span className="text-xs font-bold text-gray-400">{rotulo}</span>
+      <p className="text-[11px] text-gray-400">{texto}</p>
+      <button onClick={aoNavegar} className="text-[11px] text-green-600 font-medium hover:underline">
+        Ver essa semana
+      </button>
+    </div>
+  )
+}
+
 export default function TarefasSemanaPage() {
   const [me, setMe] = useState<any>(null)
   const [usuarios, setUsuarios] = useState<any[]>([])
@@ -87,6 +219,11 @@ export default function TarefasSemanaPage() {
   const [kpi, setKpi] = useState<any>(null)
   const [carregandoKpi, setCarregandoKpi] = useState(false)
   const [colapsados, setColapsados] = useState<Record<string, boolean>>({})
+
+  // No mobile, a faixa Ontem/Hoje/Amanhã rola de lado (igual um carrossel) —
+  // esse ref deixa o bloco "Hoje" já centralizado na tela ao abrir a página,
+  // sem precisar arrastar pro lado pra achar o mais importante.
+  const hojeBlocoRef = useRef<HTMLDivElement>(null)
 
   // Justificativa obrigatória ao executar/não executar OU ao remarcar de dia
   // a "missão do dia" — fica registrada para a análise de performance.
@@ -136,6 +273,15 @@ export default function TarefasSemanaPage() {
   }, [podeGerenciarEquipe])
 
   useEffect(() => { carregar() }, [carregar])
+
+  // Centraliza o bloco "Hoje" na faixa Ontem/Hoje/Amanhã sempre que ela é
+  // exibida (carregamento inicial, troca de semana, dados recarregados) —
+  // em telas largas isso não faz nada (a faixa não rola), mas no celular
+  // evita que o usuário precise arrastar pro lado pra ver logo de cara o
+  // dia mais importante.
+  useEffect(() => {
+    hojeBlocoRef.current?.scrollIntoView({ inline: 'center', block: 'nearest' })
+  }, [loading, semanaInicio])
 
   // dia opcional: quando informado, a tarefa já entra "encaixada" naquele dia
   // (clique numa pílula de dia, ou arrastar direto para um bloco do calendário).
@@ -373,6 +519,11 @@ export default function TarefasSemanaPage() {
   // se hoje é domingo (último dia da semana Seg-Dom), amanhã já é segunda da
   // PRÓXIMA semana, que não aparece nesta tela, então nenhum bloco é marcado.
   const amanhaDiaIdx = hojeDiaIdx === 6 ? -1 : hojeDiaIdx + 1
+  // Mesma ideia para "ontem": se hoje é segunda (primeiro dia da semana
+  // Seg-Dom), ontem foi domingo da semana ANTERIOR — fora do array desta
+  // semana. -1 sinaliza esse caso pro bloco "Ontem" oferecer o atalho pra
+  // semana anterior em vez de tentar mostrar um dia que não existe aqui.
+  const ontemDiaIdx = hojeDiaIdx === 0 ? -1 : hojeDiaIdx - 1
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
@@ -458,11 +609,13 @@ export default function TarefasSemanaPage() {
           <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm space-y-3 order-2 lg:order-1">
             <div className="flex items-center justify-between flex-wrap gap-1">
               <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
-                Esta semana
+                {ehSemanaAtual ? 'Ontem, hoje e amanhã' : 'Esta semana'}
                 <span className="text-xs font-normal text-gray-400">({planejadas.length})</span>
               </h2>
               <p className="text-[11px] text-gray-400">
-                Arraste uma pendente até o dia, ou clique na letra do dia da semana abaixo da tarefa no quadro ao lado
+                {ehSemanaAtual
+                  ? 'Arraste uma pendente até o dia (ou de um dia para o outro), ou clique na letra do dia abaixo da tarefa no quadro ao lado'
+                  : 'Arraste uma pendente até o dia, ou clique na letra do dia da semana abaixo da tarefa no quadro ao lado'}
               </p>
             </div>
 
@@ -472,109 +625,106 @@ export default function TarefasSemanaPage() {
               </p>
             )}
 
-            {/* Blocos de dia, sempre Segunda→Domingo — a grade "quebra linha" em telas
-                menores em vez de exigir rolar pro lado, e cada dia tem sua própria
-                rolagem interna quando tem muita tarefa, pra não esticar a página inteira. */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-2.5">
-              {ordemDiasCalendario.map(dia => {
-                const data = dataDoDiaLocal(semanaInicio, dia)
-                const itens = planejadas.filter(p => p.diaSemana === dia)
-                const ehHoje = ehSemanaAtual && dia === hojeDiaIdx
-                const ehAmanha = ehSemanaAtual && dia === amanhaDiaIdx
-                return (
-                  <div
-                    key={dia}
-                    onDragOver={e => e.preventDefault()}
-                    onDrop={e => onDropDia(e, dia)}
-                    className={`rounded-2xl border p-2.5 flex flex-col gap-2 min-h-[120px] transition-colors ${
-                      ehHoje ? 'border-green-300 bg-green-50/50 ring-1 ring-green-200' : 'border-gray-100 bg-gray-50/60'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-gray-700">{DIAS_CURTO[dia]}</span>
-                        <span className="text-[10px] text-gray-400">{formatDataCurta(data)}</span>
-                      </div>
-                      {ehHoje ? (
-                        <span className="inline-block mt-1 text-[9px] bg-green-500 text-white font-bold px-1.5 py-0.5 rounded-full">HOJE</span>
-                      ) : ehAmanha ? (
-                        <span className="inline-block mt-1 text-[9px] bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded-full">AMANHÃ</span>
-                      ) : null}
-                    </div>
-
-                    <div className="flex-1 space-y-1.5 max-h-64 overflow-y-auto pr-0.5">
-                      {itens.length === 0 ? (
-                        <p className="text-[11px] text-gray-300 text-center py-6">Solte aqui</p>
-                      ) : itens.map((p: any) => (
-                        <div
-                          key={p.id}
-                          draggable
-                          onDragStart={e => e.dataTransfer.setData('text/plain', JSON.stringify({ origem: 'planejada', id: p.id }))}
-                          className={`rounded-lg border p-2 cursor-grab active:cursor-grabbing ${
-                            p.missaoDia ? 'border-amber-200 bg-amber-50' : p.concluida ? 'border-green-100 bg-green-50' : 'border-gray-100 bg-white'
-                          }`}
-                        >
-                          <div className="flex items-start gap-1.5">
-                            <button
-                              onClick={() => clicarConcluir(p)}
-                              disabled={processando === p.itemId || processando === p.id}
-                              className="mt-0.5 flex-shrink-0 disabled:opacity-50"
-                              title={p.concluida ? 'Reabrir' : 'Marcar como concluída'}
-                            >
-                              {p.concluida
-                                ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
-                                : <Circle className="w-3.5 h-3.5 text-gray-300 hover:text-green-500" />}
-                            </button>
-                            <div className="min-w-0 flex-1">
-                              {p.missaoDia && (
-                                <span className="flex items-center gap-0.5 text-[9px] font-bold text-amber-700 mb-0.5">
-                                  <Target className="w-2.5 h-2.5" /> MISSÃO
-                                </span>
-                              )}
-                              <p className={`text-[11px] leading-snug ${p.concluida ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
-                                {p.titulo}
-                              </p>
-                              <p className="text-[10px] text-gray-400 truncate">{p.projeto?.codigo}</p>
-                              {p.missaoDia && p.justificativa && (
-                                <p className="text-[10px] text-amber-700 mt-1 bg-white/70 rounded px-1.5 py-1 border border-amber-100">
-                                  "{p.justificativa}"
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-end gap-2 mt-1">
-                            {(ehSemanaAtual || p.missaoDia) && (
-                              <button
-                                onClick={() => alternarMissaoDia(p)}
-                                disabled={processando === p.id || !ehSemanaAtual}
-                                className={`disabled:opacity-40 ${p.missaoDia ? 'text-amber-500 hover:text-amber-600' : 'text-gray-300 hover:text-amber-500'}`}
-                                title={
-                                  p.missaoDia
-                                    ? 'Remover missão do dia'
-                                    : ehSemanaAtual
-                                      ? 'Marcar como missão de hoje'
-                                      : 'Só é possível marcar a missão do dia na semana atual'
-                                }
-                              >
-                                <Star className={`w-3 h-3 ${p.missaoDia ? 'fill-amber-400' : ''}`} />
-                              </button>
-                            )}
-                            <button
-                              onClick={() => removerDaSemana(p.id)}
-                              disabled={processando === p.id}
-                              className="text-gray-300 hover:text-red-500"
-                              title="Tirar da semana"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+            {ehSemanaAtual ? (
+              /* Faixa Ontem/Hoje/Amanhã — foco no que importa agora. No celular
+                 rola de lado (igual um carrossel, com "encaixe" em cada bloco);
+                 em telas largas os 3 ficam lado a lado, com "Hoje" ocupando o
+                 dobro do espaço e naturalmente ao centro, por ser o mais
+                 importante. */
+              <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-1 -mx-1 px-1 sm:overflow-visible sm:snap-none sm:mx-0 sm:px-0">
+                {ontemDiaIdx >= 0 ? (
+                  <div className="snap-center shrink-0 w-[70%] max-w-[240px] sm:w-0 sm:shrink sm:grow sm:basis-0 sm:max-w-none">
+                    <BlocoDia
+                      dia={ontemDiaIdx}
+                      data={dataDoDiaLocal(semanaInicio, ontemDiaIdx)}
+                      itens={planejadas.filter(p => p.diaSemana === ontemDiaIdx)}
+                      rotulo="Ontem"
+                      onDropDia={onDropDia}
+                      processando={processando}
+                      ehSemanaAtual={ehSemanaAtual}
+                      clicarConcluir={clicarConcluir}
+                      alternarMissaoDia={alternarMissaoDia}
+                      removerDaSemana={removerDaSemana}
+                    />
                   </div>
-                )
-              })}
-            </div>
+                ) : (
+                  <div className="snap-center shrink-0 w-[70%] max-w-[240px] sm:w-0 sm:shrink sm:grow sm:basis-0 sm:max-w-none">
+                    <BlocoForaDaSemana
+                      rotulo="Ontem"
+                      texto="Era da semana anterior"
+                      aoNavegar={() => setSemanaInicio(d => { const n = new Date(d); n.setDate(n.getDate() - 7); return n })}
+                    />
+                  </div>
+                )}
+
+                <div
+                  ref={hojeBlocoRef}
+                  className="snap-center shrink-0 w-[84%] max-w-[360px] sm:w-0 sm:shrink sm:grow-[2] sm:basis-0 sm:max-w-none"
+                >
+                  <BlocoDia
+                    dia={hojeDiaIdx}
+                    data={dataDoDiaLocal(semanaInicio, hojeDiaIdx)}
+                    itens={planejadas.filter(p => p.diaSemana === hojeDiaIdx)}
+                    rotulo="Hoje"
+                    destaque="hoje"
+                    tamanho="grande"
+                    onDropDia={onDropDia}
+                    processando={processando}
+                    ehSemanaAtual={ehSemanaAtual}
+                    clicarConcluir={clicarConcluir}
+                    alternarMissaoDia={alternarMissaoDia}
+                    removerDaSemana={removerDaSemana}
+                  />
+                </div>
+
+                {amanhaDiaIdx >= 0 ? (
+                  <div className="snap-center shrink-0 w-[70%] max-w-[240px] sm:w-0 sm:shrink sm:grow sm:basis-0 sm:max-w-none">
+                    <BlocoDia
+                      dia={amanhaDiaIdx}
+                      data={dataDoDiaLocal(semanaInicio, amanhaDiaIdx)}
+                      itens={planejadas.filter(p => p.diaSemana === amanhaDiaIdx)}
+                      rotulo="Amanhã"
+                      destaque="amanha"
+                      onDropDia={onDropDia}
+                      processando={processando}
+                      ehSemanaAtual={ehSemanaAtual}
+                      clicarConcluir={clicarConcluir}
+                      alternarMissaoDia={alternarMissaoDia}
+                      removerDaSemana={removerDaSemana}
+                    />
+                  </div>
+                ) : (
+                  <div className="snap-center shrink-0 w-[70%] max-w-[240px] sm:w-0 sm:shrink sm:grow sm:basis-0 sm:max-w-none">
+                    <BlocoForaDaSemana
+                      rotulo="Amanhã"
+                      texto="Já é da próxima semana"
+                      aoNavegar={() => setSemanaInicio(d => { const n = new Date(d); n.setDate(n.getDate() + 7); return n })}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Semanas que não são a atual não têm um "hoje" de referência —
+                 mantém a grade completa Segunda→Domingo, útil pra revisar uma
+                 semana passada ou planejar uma futura inteira. */
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-2.5">
+                {ordemDiasCalendario.map(dia => (
+                  <BlocoDia
+                    key={dia}
+                    dia={dia}
+                    data={dataDoDiaLocal(semanaInicio, dia)}
+                    itens={planejadas.filter(p => p.diaSemana === dia)}
+                    rotulo={DIAS_CURTO[dia]}
+                    onDropDia={onDropDia}
+                    processando={processando}
+                    ehSemanaAtual={ehSemanaAtual}
+                    clicarConcluir={clicarConcluir}
+                    alternarMissaoDia={alternarMissaoDia}
+                    removerDaSemana={removerDaSemana}
+                  />
+                ))}
+              </div>
+            )}
 
             {/* Sem dia definido — também é área de soltar (arrastar aqui tira o dia) */}
             <div
