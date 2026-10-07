@@ -85,7 +85,7 @@ function BlocoDia({
   data: Date
   itens: any[]
   rotulo: string
-  destaque?: 'hoje' | 'amanha' | null
+  destaque?: 'hoje' | 'amanha' | 'ontem' | null
   tamanho?: 'normal' | 'grande'
   onDropDia: (e: React.DragEvent, dia: number | null) => void
   processando: string | null
@@ -112,6 +112,8 @@ function BlocoDia({
           <span className="inline-block mt-1 text-[9px] bg-green-500 text-white font-bold px-1.5 py-0.5 rounded-full">HOJE</span>
         ) : destaque === 'amanha' ? (
           <span className="inline-block mt-1 text-[9px] bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded-full">AMANHÃ</span>
+        ) : destaque === 'ontem' ? (
+          <span className="inline-block mt-1 text-[9px] bg-gray-200 text-gray-600 font-bold px-1.5 py-0.5 rounded-full">ONTEM</span>
         ) : null}
       </div>
 
@@ -184,22 +186,6 @@ function BlocoDia({
           </div>
         ))}
       </div>
-    </div>
-  )
-}
-
-// Placeholder pro bloco "Ontem"/"Amanhã" quando esse dia cai fora da semana
-// carregada (ex: hoje é segunda, então "ontem" é domingo da semana anterior)
-// — em vez de tentar mostrar dados que não foram buscados, oferece um atalho
-// direto pra navegar até a semana certa.
-function BlocoForaDaSemana({ rotulo, texto, aoNavegar }: { rotulo: string; texto: string; aoNavegar: () => void }) {
-  return (
-    <div className="rounded-2xl border border-dashed border-gray-200 p-3 flex flex-col items-center justify-center text-center gap-1.5 min-h-[120px]">
-      <span className="text-xs font-bold text-gray-400">{rotulo}</span>
-      <p className="text-[11px] text-gray-400">{texto}</p>
-      <button onClick={aoNavegar} className="text-[11px] text-green-600 font-medium hover:underline">
-        Ver essa semana
-      </button>
     </div>
   )
 }
@@ -609,13 +595,11 @@ export default function TarefasSemanaPage() {
           <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm space-y-3 order-2 lg:order-1">
             <div className="flex items-center justify-between flex-wrap gap-1">
               <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
-                {ehSemanaAtual ? 'Ontem, hoje e amanhã' : 'Esta semana'}
+                Esta semana
                 <span className="text-xs font-normal text-gray-400">({planejadas.length})</span>
               </h2>
               <p className="text-[11px] text-gray-400">
-                {ehSemanaAtual
-                  ? 'Arraste uma pendente até o dia (ou de um dia para o outro), ou clique na letra do dia abaixo da tarefa no quadro ao lado'
-                  : 'Arraste uma pendente até o dia, ou clique na letra do dia da semana abaixo da tarefa no quadro ao lado'}
+                Role para o lado pra ver a semana toda — hoje fica em destaque. Arraste uma pendente até o dia (ou de um dia pro outro), ou clique na letra do dia abaixo da tarefa no quadro ao lado
               </p>
             </div>
 
@@ -625,106 +609,47 @@ export default function TarefasSemanaPage() {
               </p>
             )}
 
-            {ehSemanaAtual ? (
-              /* Faixa Ontem/Hoje/Amanhã — foco no que importa agora. No celular
-                 rola de lado (igual um carrossel, com "encaixe" em cada bloco);
-                 em telas largas os 3 ficam lado a lado, com "Hoje" ocupando o
-                 dobro do espaço e naturalmente ao centro, por ser o mais
-                 importante. */
-              <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-1 -mx-1 px-1 sm:overflow-visible sm:snap-none sm:mx-0 sm:px-0">
-                {ontemDiaIdx >= 0 ? (
-                  <div className="snap-center shrink-0 w-[70%] max-w-[240px] sm:w-0 sm:shrink sm:grow sm:basis-0 sm:max-w-none">
-                    <BlocoDia
-                      dia={ontemDiaIdx}
-                      data={dataDoDiaLocal(semanaInicio, ontemDiaIdx)}
-                      itens={planejadas.filter(p => p.diaSemana === ontemDiaIdx)}
-                      rotulo="Ontem"
-                      onDropDia={onDropDia}
-                      processando={processando}
-                      ehSemanaAtual={ehSemanaAtual}
-                      clicarConcluir={clicarConcluir}
-                      alternarMissaoDia={alternarMissaoDia}
-                      removerDaSemana={removerDaSemana}
-                    />
-                  </div>
-                ) : (
-                  <div className="snap-center shrink-0 w-[70%] max-w-[240px] sm:w-0 sm:shrink sm:grow sm:basis-0 sm:max-w-none">
-                    <BlocoForaDaSemana
-                      rotulo="Ontem"
-                      texto="Era da semana anterior"
-                      aoNavegar={() => setSemanaInicio(d => { const n = new Date(d); n.setDate(n.getDate() - 7); return n })}
-                    />
-                  </div>
-                )}
-
-                <div
-                  ref={hojeBlocoRef}
-                  className="snap-center shrink-0 w-[84%] max-w-[360px] sm:w-0 sm:shrink sm:grow-[2] sm:basis-0 sm:max-w-none"
-                >
-                  <BlocoDia
-                    dia={hojeDiaIdx}
-                    data={dataDoDiaLocal(semanaInicio, hojeDiaIdx)}
-                    itens={planejadas.filter(p => p.diaSemana === hojeDiaIdx)}
-                    rotulo="Hoje"
-                    destaque="hoje"
-                    tamanho="grande"
-                    onDropDia={onDropDia}
-                    processando={processando}
-                    ehSemanaAtual={ehSemanaAtual}
-                    clicarConcluir={clicarConcluir}
-                    alternarMissaoDia={alternarMissaoDia}
-                    removerDaSemana={removerDaSemana}
-                  />
-                </div>
-
-                {amanhaDiaIdx >= 0 ? (
-                  <div className="snap-center shrink-0 w-[70%] max-w-[240px] sm:w-0 sm:shrink sm:grow sm:basis-0 sm:max-w-none">
-                    <BlocoDia
-                      dia={amanhaDiaIdx}
-                      data={dataDoDiaLocal(semanaInicio, amanhaDiaIdx)}
-                      itens={planejadas.filter(p => p.diaSemana === amanhaDiaIdx)}
-                      rotulo="Amanhã"
-                      destaque="amanha"
-                      onDropDia={onDropDia}
-                      processando={processando}
-                      ehSemanaAtual={ehSemanaAtual}
-                      clicarConcluir={clicarConcluir}
-                      alternarMissaoDia={alternarMissaoDia}
-                      removerDaSemana={removerDaSemana}
-                    />
-                  </div>
-                ) : (
-                  <div className="snap-center shrink-0 w-[70%] max-w-[240px] sm:w-0 sm:shrink sm:grow sm:basis-0 sm:max-w-none">
-                    <BlocoForaDaSemana
-                      rotulo="Amanhã"
-                      texto="Já é da próxima semana"
-                      aoNavegar={() => setSemanaInicio(d => { const n = new Date(d); n.setDate(n.getDate() + 7); return n })}
-                    />
-                  </div>
-                )}
-              </div>
-            ) : (
-              /* Semanas que não são a atual não têm um "hoje" de referência —
-                 mantém a grade completa Segunda→Domingo, útil pra revisar uma
-                 semana passada ou planejar uma futura inteira. */
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-2.5">
-                {ordemDiasCalendario.map(dia => (
-                  <BlocoDia
+            {/* Faixa da semana inteira (Segunda→Domingo), sempre rolável de lado —
+                em qualquer tamanho de tela, dá pra "andar" com o dedo/scroll pra
+                ver os outros dias. "Hoje" vem com destaque visual e o dobro do
+                espaço dos demais (por ser o mais importante), e Ontem/Amanhã
+                também ganham um rótulo/selo próprio — só quando a semana exibida
+                é a atual, claro (não existe "hoje" numa semana passada/futura). */}
+            <div className="flex gap-3 overflow-x-auto snap-x snap-proximity pb-1 -mx-1 px-1">
+              {ordemDiasCalendario.map(dia => {
+                const data = dataDoDiaLocal(semanaInicio, dia)
+                const itens = planejadas.filter(p => p.diaSemana === dia)
+                const ehHoje = ehSemanaAtual && dia === hojeDiaIdx
+                const ehAmanha = ehSemanaAtual && dia === amanhaDiaIdx
+                const ehOntem = ehSemanaAtual && dia === ontemDiaIdx
+                const destaque = ehHoje ? 'hoje' : ehAmanha ? 'amanha' : ehOntem ? 'ontem' : null
+                const rotulo = ehHoje ? 'Hoje' : ehAmanha ? 'Amanhã' : ehOntem ? 'Ontem' : DIAS_CURTO[dia]
+                return (
+                  <div
                     key={dia}
-                    dia={dia}
-                    data={dataDoDiaLocal(semanaInicio, dia)}
-                    itens={planejadas.filter(p => p.diaSemana === dia)}
-                    rotulo={DIAS_CURTO[dia]}
-                    onDropDia={onDropDia}
-                    processando={processando}
-                    ehSemanaAtual={ehSemanaAtual}
-                    clicarConcluir={clicarConcluir}
-                    alternarMissaoDia={alternarMissaoDia}
-                    removerDaSemana={removerDaSemana}
-                  />
-                ))}
-              </div>
-            )}
+                    ref={ehHoje ? hojeBlocoRef : undefined}
+                    className={`snap-center shrink-0 ${
+                      ehHoje ? 'w-[80%] max-w-[340px] sm:w-[300px]' : 'w-[56%] max-w-[190px] sm:w-[160px]'
+                    }`}
+                  >
+                    <BlocoDia
+                      dia={dia}
+                      data={data}
+                      itens={itens}
+                      rotulo={rotulo}
+                      destaque={destaque}
+                      tamanho={ehHoje ? 'grande' : 'normal'}
+                      onDropDia={onDropDia}
+                      processando={processando}
+                      ehSemanaAtual={ehSemanaAtual}
+                      clicarConcluir={clicarConcluir}
+                      alternarMissaoDia={alternarMissaoDia}
+                      removerDaSemana={removerDaSemana}
+                    />
+                  </div>
+                )
+              })}
+            </div>
 
             {/* Sem dia definido — também é área de soltar (arrastar aqui tira o dia) */}
             <div
